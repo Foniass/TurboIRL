@@ -30,6 +30,7 @@ class VideoTranscoder(
     class Stats {
         @Volatile var bitrateKbps = 0
         @Volatile var halfRate = false
+        @Volatile var frameDivider = 1
         @Volatile var width = 0
         @Volatile var height = 0
         @Volatile var inputWidth = 0
@@ -137,9 +138,11 @@ class VideoTranscoder(
         }
     }
 
-    fun setHalfRate(half: Boolean) {
-        stats.halfRate = half
-        scaler?.halfRate = half
+    /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
+    fun setFrameDivider(divider: Int) {
+        stats.frameDivider = divider
+        stats.halfRate = divider > 1
+        scaler?.frameDivider = divider
     }
 
     /** Output height (480 / 720 / 1080); the encoder is recreated when it changes. */
@@ -172,7 +175,7 @@ class VideoTranscoder(
         val p = pps ?: return
         try {
             val sc = scaler ?: GlScaler(logger).also { scaler = it }
-            sc.halfRate = stats.halfRate
+            sc.frameDivider = stats.frameDivider
             createEncoder()
 
             val dec = MediaCodec.createDecoderByType(MIME)

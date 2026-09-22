@@ -48,8 +48,8 @@ class GlScaler(private val logger: Logger) {
     lateinit var inputSurface: Surface
         private set
 
-    /** Skip every other frame (half frame rate). */
-    @Volatile var halfRate = false
+    /** Draw one frame in [frameDivider] (1 = all, 2 = half rate, 6 = 5 i/s…). */
+    @Volatile var frameDivider = 1
     private var frameCount = 0L
 
     @Volatile var framesDrawn = 0L
@@ -163,7 +163,8 @@ class GlScaler(private val logger: Logger) {
             return
         }
         frameCount++
-        if (window == EGL14.EGL_NO_SURFACE || (halfRate && frameCount % 2 == 1L)) return
+        val divider = frameDivider.coerceAtLeast(1)
+        if (window == EGL14.EGL_NO_SURFACE || frameCount % divider != 0L) return
         surfaceTexture.getTransformMatrix(texMatrix)
 
         GLES20.glViewport(0, 0, outWidth, outHeight)

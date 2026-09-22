@@ -77,13 +77,20 @@ class AdaptiveBitrate(
                 val now = System.currentTimeMillis()
                 val suspended = videoSuspended()
                 if (suspended && !wasSuspended) {
-                    // Audio priority took over: start again from the floor when video comes back
+                    // Audio priority took over: degraded video (few frames, tiny bitrate) rather than none,
+                    // so the receiver never sees a gap in the video timeline; restart from the floor after.
                     target = minKbps
+                    degraded = true
                     apply(target)
+                    logger.log("Vidéo dégradée : ${DEGRADED_KBPS} kb/s, ${30 / DEGRADED_DIVIDER} i/s, le son continue")
+                } else if (!suspended && wasSuspended) {
+                    degraded = false
+                    apply(target)
+                }
+                if (suspended != wasSuspended) {
                     lastCut = now
                     lastTargetChange = now
                     outSamples.clear()
-                    logger.log("Encodeur ramené à $minKbps kb/s (vidéo suspendue)")
                 }
                 wasSuspended = suspended
                 if (!st.connected) {
@@ -180,16 +187,24 @@ class AdaptiveBitrate(
     }
 
     private var lastApplied = 0.0
+    private var degraded = false
 
     private fun apply(kbps: Int) {
         targetKbps = kbps
         lastApplied = correction
-        transcoder.setBitrate((kbps * correction).toInt().coerceAtLeast(200))
-        transcoder.setHalfRate(kbps < LOW_KBPS)
+        if (degraded) {
+            transcoder.setBitrate(DEGRADED_KBPS)
+            transcoder.setFrameDivider(DEGRADED_DIVIDER)
+        } else {
+            transcoder.setBitrate((kbps * correction).toInt().coerceAtLeast(200))
+            transcoder.setFrameDivider(if (kbps < LOW_KBPS) 2 else 1)
+        }
     }
 
     private companion object {
         const val LOW_KBPS = 700
+        const val DEGRADED_KBPS = 150
+        const val DEGRADED_DIVIDER = 6
         const val KBPS_720 = 650
         const val KBPS_1080 = 3500
     }

@@ -96,6 +96,9 @@ class RelayService : Service() {
         // With a transcoder the bitrate controller reacts first; audio priority is only the last resort.
         val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger, if (config.transcode) 0.6 else 0.4)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
+        // Without a transcoder, keep one keyframe per GOP flowing while video is withheld (OBS loses its
+        // audio timing after a gap of a few seconds in the video)
+        flvRelay.trickleKeyframes = true
         // With the camera brake, a small receive buffer makes the back-pressure reach the camera fast.
         val brake = config.adaptive && !config.transcode
         val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)

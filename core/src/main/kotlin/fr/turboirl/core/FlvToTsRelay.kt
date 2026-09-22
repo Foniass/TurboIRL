@@ -27,6 +27,12 @@ class FlvToTsRelay(
     /** With a fixed-bitrate camera, repeated collapses lengthen the hold; a transcoder adapts instead. */
     @Volatile var growingHold = true
 
+    /**
+     * While video is withheld, still let keyframes through (a trickle of one picture per GOP)
+     * so that the receiver never sees a gap in the video timeline.
+     */
+    @Volatile var trickleKeyframes = false
+
     // Video input size from the stream metadata, for the processor
     private var width = 0
     private var height = 0
@@ -136,10 +142,35 @@ class FlvToTsRelay(
             if (!keyframe) return
             started = true
         }
+        // signed 24-bit composition time offset
+        val cts = ((data[2].toInt() shl 24) or ((data[3].toInt() and 0xFF) shl 16) or ((data[4].toInt() and 0xFF) shl 8)) shr 8
+
         val nowNs = System.nanoTime()
         if (videoSuspended) {
             val ms = (nowNs - suspendedAtNs) / 1_000_000
-            if (congested() || !keyframe || ms < holdMs) return
+            if (congested() || !keyframe || ms < holdMs) {
+                val p = processor
+                if (p != null && p.active) {
+                    // Degraded rather than absent: the transcoder keeps a few frames per second flowing
+                    // at a tiny bitrate, so the receiver never sees a gap in the video timeline.
+                    val o = annexB(data, spsNal, ppsNal, keyframe)
+                    val outMs = outputTime(timestampMs)
+                    stats.videoFrames++
+                    p.frame(scratch.copyOf(o), outMs + cts, outMs, keyframe)
+                    return
+                }
+                if (trickleKeyframes && keyframe) {
+                    // One self-contained picture per GOP keeps the receiver's video clock alive
+                    val o = annexB(data, spsNal, ppsNal, true)
+                    val outMs = outputTime(timestampMs)
+                    val dts = outMs * 90 + PTS_OFFSET
+                    synchronized(muxer) {
+                        muxer.writeVideo(scratch, o, dts + cts * 90L, dts, outMs * 90, true)
+                        stats.tsBytes = muxer.bytesWritten
+                    }
+                }
+                return
+            }
             videoSuspended = false
             stats.videoSuspended = false
             stats.videoSuspendedMs += ms
@@ -161,9 +192,25 @@ class FlvToTsRelay(
             logger.log("Liaison saturée : vidéo suspendue (${holdMs / 1000} s minimum), le son continue")
             return
         }
-        // signed 24-bit composition time offset
-        val cts = ((data[2].toInt() shl 24) or ((data[3].toInt() and 0xFF) shl 16) or ((data[4].toInt() and 0xFF) shl 8)) shr 8
+        val o = annexB(data, spsNal, ppsNal, keyframe)
+        val out = scratch
+        val outMs = outputTime(timestampMs)
+        stats.videoFrames++
+        if (keyframe) stats.keyframes++
+        val p = processor
+        if (p != null && p.active) {
+            p.frame(out.copyOf(o), outMs + cts, outMs, keyframe)
+            return
+        }
+        val dts = outMs * 90 + PTS_OFFSET
+        synchronized(muxer) {
+            muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
+            stats.tsBytes = muxer.bytesWritten
+        }
+    }
 
+    /** FLV AVC tag body → Annex B access unit (AUD, SPS/PPS on keyframes, slices) in [scratch]; returns the length. */
+    private fun annexB(data: ByteArray, spsNal: ByteArray, ppsNal: ByteArray, keyframe: Boolean): Int {
         // Worst case growth: every NAL gains (4 - nalLengthSize) bytes.
         val needed = data.size * 2 + spsNal.size + ppsNal.size + 32
         if (scratch.size < needed) scratch = ByteArray(needed)
@@ -183,20 +230,7 @@ class FlvToTsRelay(
                 o += len
             }
         }
-
-        val outMs = outputTime(timestampMs)
-        stats.videoFrames++
-        if (keyframe) stats.keyframes++
-        val p = processor
-        if (p != null && p.active) {
-            p.frame(out.copyOf(o), outMs + cts, outMs, keyframe)
-            return
-        }
-        val dts = outMs * 90 + PTS_OFFSET
-        synchronized(muxer) {
-            muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
-            stats.tsBytes = muxer.bytesWritten
-        }
+        return o
     }
 
     override fun onAudio(timestampMs: Long, data: ByteArray) {
