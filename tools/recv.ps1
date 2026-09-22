@@ -13,7 +13,7 @@ param(
     [int]$ObsPort = 9001
 )
 
-# Tout ce qui s'affiche est aussi écrit dans dumpsecv-<date>.log (pour Claude)
+# Tout ce qui s'affiche est aussi ecrit dans dumps/recv-<date>.log (pour Claude)
 Start-Transcript -Path (Join-Path $PSScriptRoot "..\dumps\recv-$(Get-Date -Format yyyyMMdd-HHmmss).log") -Append | Out-Null
 
 $ErrorActionPreference = "Stop"
