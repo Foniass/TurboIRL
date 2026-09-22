@@ -16,6 +16,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import fr.turboirl.app.gopro.GoProController
+import fr.turboirl.app.transcode.AdaptiveBitrate
+import fr.turboirl.app.transcode.VideoTranscoder
 import fr.turboirl.core.FlvToTsRelay
 import fr.turboirl.core.rtmp.RtmpServer
 
@@ -34,6 +36,9 @@ class RelayService : Service() {
         val videoSuspendedMs: Long,
         val gopro: GoProController?,
         val cameraLimitKbps: Int,
+        val transcoder: VideoTranscoder?,
+        val encoderTargetKbps: Int,
+        val encoderOutKbps: Long,
         val srt: SrtSender.Stats,
     )
 
@@ -45,6 +50,9 @@ class RelayService : Service() {
     private var srtSender: SrtSender? = null
     private var gopro: GoProController? = null
     private var governor: BitrateGovernor? = null
+    private var transcoder: VideoTranscoder? = null
+    private var abr: AdaptiveBitrate? = null
+    private var lastEncBytes = 0L
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var lastInBytes = 0L
@@ -83,7 +91,16 @@ class RelayService : Service() {
         val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         // With the camera brake, a small receive buffer makes the back-pressure reach the camera fast.
-        val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (config.adaptive) 64 * 1024 else 0)
+        val brake = config.adaptive && !config.transcode
+        val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)
+        if (config.transcode) {
+            val minKbps = 400
+            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 6 / 10).coerceAtLeast(minKbps))
+            flvRelay.processor = tc
+            transcoder = tc
+            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, logger).also { it.start() }
+            logger.log("Réencodage activé : sortie ${minKbps}-${config.outMaxKbps} kb/s adaptée en continu")
+        }
         try {
             server.start()
         } catch (e: Exception) {
@@ -97,7 +114,7 @@ class RelayService : Service() {
         rtmpServer = server
         lastError = null
         logger.log("Relais démarré → srt://${config.srtHost}:${config.srtPort}")
-        if (config.adaptive) {
+        if (brake) {
             governor = BitrateGovernor(sender, server.limiter, config.srtLatencyMs, config.goproMaxKbps, logger).also { it.start() }
             logger.log("Débit modulable activé : frein caméra entre 900 et ${config.goproMaxKbps} kb/s")
         }
@@ -136,14 +153,20 @@ class RelayService : Service() {
         val sender = srtSender
         val controller = gopro
         val gov = governor
+        val tc = transcoder
+        val ab = abr
         governor = null
+        transcoder = null
+        abr = null
         rtmpServer = null
         srtSender = null
         relay = null
         gopro = null
         // Socket teardown can block for a few seconds: keep it off the main thread.
         Thread {
+            ab?.stop()
             gov?.stop()
+            tc?.release()
             controller?.stop()
             server?.stop()
             sender?.stop()
@@ -176,6 +199,9 @@ class RelayService : Service() {
             videoSuspendedMs = stats.videoSuspendedMs,
             gopro = gopro,
             cameraLimitKbps = governor?.limitKbps ?: 0,
+            transcoder = transcoder,
+            encoderTargetKbps = abr?.targetKbps ?: 0,
+            encoderOutKbps = transcoder?.let { t -> val b = t.stats.bytesOut; val r = ((b - lastEncBytes) * 8 / 1000 / seconds).toLong(); lastEncBytes = b; r } ?: 0,
             srt = sender.stats,
         )
         lastInBytes = inBytes
@@ -193,6 +219,7 @@ class RelayService : Service() {
                             "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
                             "saturations +${st.queueOverflows - lastOverflows}" +
                             (if (snap.cameraLimitKbps > 0) ", frein caméra ${snap.cameraLimitKbps} kb/s" else "") +
+                            (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.halfRate) " 15 i/s" else ""}, perdues ${t.stats.framesDropped})" } ?: "") +
                             (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
                     } else "SRT déconnecté"
             )

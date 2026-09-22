@@ -74,6 +74,21 @@
         </LinearLayout>
 
         <CheckBox
+            android:id="@+id/transcode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Réencodage sur le téléphone : débit vidéo adapté en continu, son intact" />
+
+        <EditText
+            android:id="@+id/outMaxKbps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Débit vidéo max en sortie (kb/s), ex. 3000"
+            android:importantForAutofill="no"
+            android:inputType="number"
+            android:singleLine="true" />
+
+        <CheckBox
             android:id="@+id/adaptive"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

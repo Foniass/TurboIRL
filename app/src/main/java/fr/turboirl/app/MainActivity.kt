@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var battery: Button
     private lateinit var share: Button
     private lateinit var adaptive: CheckBox
+    private lateinit var transcode: CheckBox
+    private lateinit var outMaxKbps: EditText
     private lateinit var goproEnabled: CheckBox
     private lateinit var goproSsid: EditText
     private lateinit var goproPassword: EditText
@@ -53,6 +55,8 @@ class MainActivity : Activity() {
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
         adaptive = findViewById(R.id.adaptive)
+        transcode = findViewById(R.id.transcode)
+        outMaxKbps = findViewById(R.id.outMaxKbps)
         goproEnabled = findViewById(R.id.goproEnabled)
         goproSsid = findViewById(R.id.goproSsid)
         goproPassword = findViewById(R.id.goproPassword)
@@ -69,6 +73,8 @@ class MainActivity : Activity() {
         srtLatency.setText(config.srtLatencyMs.toString())
         srtStreamId.setText(config.srtStreamId)
         adaptive.isChecked = config.adaptive
+        transcode.isChecked = config.transcode
+        outMaxKbps.setText(config.outMaxKbps.toString())
         goproEnabled.isChecked = config.goproEnabled
         goproSsid.setText(config.goproSsid)
         goproPassword.setText(config.goproPassword)
@@ -105,6 +111,11 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Adresse, port (1-65535) et latence (120-15000 ms) requis", Toast.LENGTH_LONG).show()
             return
         }
+        val outMax = outMaxKbps.text.toString().toIntOrNull()
+        if (transcode.isChecked && (outMax == null || outMax !in 500..8000)) {
+            Toast.makeText(this, "Débit vidéo max en sortie entre 500 et 8000 kb/s", Toast.LENGTH_LONG).show()
+            return
+        }
         val goproOn = goproEnabled.isChecked
         val resolution = goproResolution.text.toString().toIntOrNull()
         val maxKbps = goproMaxKbps.text.toString().toIntOrNull()
@@ -127,6 +138,8 @@ class MainActivity : Activity() {
             srtHost = host, srtPort = port, srtLatencyMs = latency,
             srtStreamId = srtStreamId.text.toString().trim(),
             adaptive = adaptive.isChecked,
+            transcode = transcode.isChecked,
+            outMaxKbps = outMax ?: 3000,
             goproEnabled = goproOn,
             goproSsid = goproSsid.text.toString().trim(),
             goproPassword = goproPassword.text.toString(),
@@ -140,11 +153,12 @@ class MainActivity : Activity() {
         val service = RelayService.instance
         val running = service != null
         toggle.text = if (running) "Arrêter" else "Démarrer"
-        for (field in listOf(srtHost, srtPort, srtLatency, srtStreamId, goproSsid, goproPassword, goproResolution, goproMaxKbps)) {
+        for (field in listOf(srtHost, srtPort, srtLatency, srtStreamId, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps)) {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
         adaptive.isEnabled = !running
+        transcode.isEnabled = !running
         val gp = service?.snapshot?.gopro
         goproStatus.text = when {
             gp != null -> "GoPro ${gp.cameraName} : ${gp.state.label}" +
@@ -189,9 +203,14 @@ class MainActivity : Activity() {
         } else {
             "SRT    ✗ PC injoignable, nouvel essai en cours"
         }
+        val enc = s.transcoder?.let { t ->
+            "\n       encodeur ${s.encoderTargetKbps} kb/s cible · ${s.encoderOutKbps} kb/s réel · ${t.stats.width}x${t.stats.height}" +
+                (if (t.stats.halfRate) " · 15 i/s" else " · 30 i/s") + " · images perdues ${t.stats.framesDropped}" +
+                (if (!t.active) "\n       ⚠ réencodage abandonné, vidéo caméra directe" else "")
+        } ?: ""
         val brake = if (s.cameraLimitKbps > 0) "\n       frein caméra ${s.cameraLimitKbps} kb/s" else ""
         val pauses = if (s.videoSuspensions > 0) " · vidéo en pause ${s.videoSuspensions}× (${s.videoSuspendedMs / 1000} s)" else ""
-        return "$camera\n$srt$brake\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
+        return "$camera\n$srt$brake$enc\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
     }
 
     private fun shareLog() {

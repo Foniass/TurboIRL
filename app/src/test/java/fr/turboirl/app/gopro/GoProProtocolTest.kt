@@ -75,3 +75,18 @@ class GoProProtocolTest {
         assertArrayEquals(big, acc.feed(byteArrayOf(0x80.toByte()) + big.copyOfRange(17, 25)))
     }
 }
+
+class NalSplitTest {
+    @Test
+    fun splitsThreeAndFourByteStartCodes() {
+        val sps = byteArrayOf(0x67, 0x42, 0x00, 0x1F)
+        val pps = byteArrayOf(0x68, 0xCE.toByte(), 0x38)
+        val slice = byteArrayOf(0x65, 0x88.toByte(), 0x84.toByte(), 0x00, 0x00, 0x03)
+        val blob = byteArrayOf(0, 0, 0, 1) + sps + byteArrayOf(0, 0, 1) + pps + byteArrayOf(0, 0, 0, 1) + slice
+        val nals = fr.turboirl.app.transcode.VideoTranscoder.splitNals(blob)
+        assertEquals(3, nals.size)
+        assertArrayEquals(sps, nals[0])
+        assertArrayEquals(pps, nals[1])
+        assertArrayEquals(slice, nals[2])
+    }
+}

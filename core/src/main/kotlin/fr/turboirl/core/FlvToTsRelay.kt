@@ -18,7 +18,15 @@ class FlvToTsRelay(
     sink: TsSink,
     private val logger: Logger,
     private val congested: () -> Boolean = { false },
-) : RtmpListener {
+) : RtmpListener, EncodedVideoSink {
+
+    /** Set before the camera connects; null = the camera's video goes through untouched. */
+    @Volatile var processor: VideoProcessor? = null
+
+    // Video input size from the stream metadata, for the processor
+    private var width = 0
+    private var height = 0
+
 
     class Stats {
         @Volatile var publishing = false
@@ -79,6 +87,10 @@ class FlvToTsRelay(
     override fun onMetadata(metadata: Map<String, Any?>) {
         val w = (metadata["width"] as? Double)?.toInt()
         val h = (metadata["height"] as? Double)?.toInt()
+        if (w != null && h != null && w > 0 && h > 0) {
+            width = w
+            height = h
+        }
         val fps = metadata["framerate"] as? Double
         val kbps = (metadata["videodatarate"] as? Double)?.toInt()
         stats.videoInfo = buildString {
@@ -90,7 +102,7 @@ class FlvToTsRelay(
     }
 
     override fun onPublishEnd(reason: String) {
-        muxer.flush()
+        synchronized(muxer) { muxer.flush() }
         stats.publishing = false
         logger.log("Caméra déconnectée : $reason")
     }
@@ -128,6 +140,7 @@ class FlvToTsRelay(
             stats.videoSuspended = false
             stats.videoSuspendedMs += ms
             resumedAtNs = nowNs
+            processor?.takeIf { it.active }?.requestKeyframe()
             logger.log("Vidéo reprise après ${"%.1f".format(ms / 1000.0)} s")
         } else if (congested()) {
             // Collapsing again right after a resume: the link cannot carry video, hold it off longer.
@@ -164,11 +177,18 @@ class FlvToTsRelay(
         }
 
         val outMs = outputTime(timestampMs)
-        val dts = outMs * 90 + PTS_OFFSET
-        muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
         stats.videoFrames++
         if (keyframe) stats.keyframes++
-        stats.tsBytes = muxer.bytesWritten
+        val p = processor
+        if (p != null && p.active) {
+            p.frame(out.copyOf(o), outMs + cts, outMs, keyframe)
+            return
+        }
+        val dts = outMs * 90 + PTS_OFFSET
+        synchronized(muxer) {
+            muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
+            stats.tsBytes = muxer.bytesWritten
+        }
     }
 
     override fun onAudio(timestampMs: Long, data: ByteArray) {
@@ -202,15 +222,26 @@ class FlvToTsRelay(
         System.arraycopy(data, 2, out, 7, rawLen)
 
         val outMs = outputTime(timestampMs)
-        if (videoSuspended) {
-            val now = System.nanoTime()
-            if (now - lastPcrOnlyNs > PCR_ONLY_INTERVAL_NS) {
-                lastPcrOnlyNs = now
-                muxer.writePcrOnly(outMs * 90)
+        synchronized(muxer) {
+            if (videoSuspended) {
+                val now = System.nanoTime()
+                if (now - lastPcrOnlyNs > PCR_ONLY_INTERVAL_NS) {
+                    lastPcrOnlyNs = now
+                    muxer.writePcrOnly(outMs * 90)
+                }
             }
+            muxer.writeAudio(out, frameLen, outMs * 90 + PTS_OFFSET)
+            stats.tsBytes = muxer.bytesWritten
         }
-        muxer.writeAudio(out, frameLen, outMs * 90 + PTS_OFFSET)
-        stats.tsBytes = muxer.bytesWritten
+    }
+
+    /** Re-encoded video coming back from the processor (encoder thread). */
+    override fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean) {
+        val pts = ptsMs * 90 + PTS_OFFSET
+        synchronized(muxer) {
+            muxer.writeVideo(annexB, len, pts, pts, ptsMs * 90, keyframe)
+            stats.tsBytes = muxer.bytesWritten
+        }
     }
 
     /** Maps a session-relative RTMP timestamp onto the relay's ever-increasing timeline. */
@@ -245,6 +276,9 @@ class FlvToTsRelay(
                 p += 2 + len
             }
             logger.log("Config H.264 reçue (SPS ${sps?.size} o, PPS ${pps?.size} o)")
+            val s = sps
+            val pp = pps
+            if (s != null && pp != null) processor?.configure(s, pp, if (width > 0) width else 1280, if (height > 0) height else 720)
         } catch (e: IndexOutOfBoundsException) {
             logger.log("Config H.264 invalide")
         }
