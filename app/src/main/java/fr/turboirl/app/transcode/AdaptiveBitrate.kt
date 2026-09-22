@@ -176,13 +176,13 @@ class AdaptiveBitrate(
         }
     }
 
-    /** 480p under ~650 kb/s, 1080p only above ~3500 kb/s sustained, 720p otherwise. */
+    /**
+     * 720p by default, 1080p only above ~3500 kb/s sustained. No automatic drop to 480p: every
+     * resolution change restarts the encoder and gives the receiver a new stream to lock on, and
+     * a 720p picture at 150-400 kb/s is ugly but continuous, which matters more.
+     */
     private fun ladder(kbps: Int, current: Int): Int {
-        val h = when {
-            kbps >= (if (current >= 1080) KBPS_1080 * 9 / 10 else KBPS_1080) -> 1080
-            kbps >= (if (current >= 720) KBPS_720 * 9 / 10 else KBPS_720 * 12 / 10) -> 720
-            else -> 480
-        }
+        val h = if (kbps >= (if (current >= 1080) KBPS_1080 * 9 / 10 else KBPS_1080)) 1080 else 720
         return minOf(h, maxHeight)
     }
 
@@ -205,7 +205,6 @@ class AdaptiveBitrate(
         const val LOW_KBPS = 700
         const val DEGRADED_KBPS = 150
         const val DEGRADED_DIVIDER = 6
-        const val KBPS_720 = 650
         const val KBPS_1080 = 3500
     }
 }
