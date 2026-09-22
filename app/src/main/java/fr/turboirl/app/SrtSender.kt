@@ -1,6 +1,7 @@
 package fr.turboirl.app
 
 import fr.turboirl.core.rtmp.Logger
+import fr.turboirl.core.ts.TsMuxer
 import fr.turboirl.core.ts.TsSink
 import io.github.thibaultbee.srtdroid.core.enums.SockOpt
 import io.github.thibaultbee.srtdroid.core.enums.Transtype
@@ -27,6 +28,8 @@ class SrtSender(
         @Volatile var sendRateMbps = 0.0
         @Volatile var bandwidthMbps = 0.0
         @Volatile var sendBufferMs = 0
+        @Volatile var flightPackets = 0
+        @Volatile var sendBufferPackets = 0
         @Volatile var retransmitted = 0L
         @Volatile var dropped = 0L
         @Volatile var queueOverflows = 0L
@@ -66,7 +69,7 @@ class SrtSender(
             try {
                 socket = SrtSocket()
                 socket.setSockFlag(SockOpt.TRANSTYPE, Transtype.LIVE)
-                socket.setSockFlag(SockOpt.PAYLOADSIZE, 1316)
+                socket.setSockFlag(SockOpt.PAYLOADSIZE, TsMuxer.MAX_BATCH)
                 socket.setSockFlag(SockOpt.LATENCY, latencyMs)
                 socket.setSockFlag(SockOpt.CONNTIMEO, 4000)
                 if (streamId.isNotEmpty()) socket.setSockFlag(SockOpt.STREAMID, streamId)
@@ -116,6 +119,8 @@ class SrtSender(
                 stats.sendRateMbps = s.mbpsSendRate
                 stats.bandwidthMbps = s.mbpsBandwidth
                 stats.sendBufferMs = s.msSndBuf
+                stats.flightPackets = s.pktFlightSize
+                stats.sendBufferPackets = s.pktSndBuf
                 stats.retransmitted += s.pktRetrans
                 stats.dropped += s.pktSndDrop
             }

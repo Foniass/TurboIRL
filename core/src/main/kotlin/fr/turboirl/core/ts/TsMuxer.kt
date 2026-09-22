@@ -2,7 +2,7 @@ package fr.turboirl.core.ts
 
 /**
  * Receives MPEG-TS data, always a multiple of 188 bytes and at most [TsMuxer.MAX_BATCH]
- * (1316 bytes, the SRT live payload size). Must not block for long: it is called from the
+ * (the SRT payload size). Must not block for long: it is called from the
  * RTMP reader thread.
  */
 fun interface TsSink {
@@ -212,7 +212,9 @@ class TsMuxer(private val sink: TsSink) {
 
     companion object {
         const val TS_PACKET = 188
-        const val MAX_BATCH = 7 * TS_PACKET
+        // 6 packets = 1128 B payload: stays under the 1280 B IPv6 minimum MTU even through the
+    // 464XLAT + CGNAT of mobile carriers, where 7 packets (1316 B) may be silently dropped.
+    const val MAX_BATCH = 6 * TS_PACKET
         const val NO_PCR = -1L
 
         private const val PAT_PID = 0

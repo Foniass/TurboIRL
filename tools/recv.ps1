@@ -13,6 +13,9 @@ param(
     [int]$ObsPort = 9001
 )
 
+# Tout ce qui s'affiche est aussi écrit dans dumpsecv-<date>.log (pour Claude)
+Start-Transcript -Path (Join-Path $PSScriptRoot "..\dumps\recv-$(Get-Date -Format yyyyMMdd-HHmmss).log") -Append | Out-Null
+
 $ErrorActionPreference = "Stop"
 $dumps = Join-Path $PSScriptRoot "..\dumps"
 New-Item -ItemType Directory -Force $dumps | Out-Null
@@ -32,7 +35,7 @@ while ($true) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $dump = Join-Path $dumps "dump-$stamp.ts"
     Write-Host "`n[$(Get-Date -Format HH:mm:ss)] Attente du téléphone... (dump : $dump)"
-    & ffmpeg -hide_banner -loglevel warning -stats `
+    & ffmpeg -hide_banner -loglevel warning -stats -stats_period 5 `
         -i $src `
         -map 0 -c copy -f mpegts "udp://127.0.0.1:${ObsPort}?pkt_size=1316" `
         -map 0 -c copy -f mpegts $dump

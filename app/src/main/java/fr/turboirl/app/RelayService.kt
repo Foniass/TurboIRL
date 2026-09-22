@@ -42,6 +42,10 @@ class RelayService : Service() {
     private var lastInBytes = 0L
     private var lastOutBytes = 0L
     private var lastTickNs = 0L
+    private var ticks = 0
+    private var lastRetrans = 0L
+    private var lastDropped = 0L
+    private var lastOverflows = 0L
 
     @Volatile
     var snapshot: Snapshot? = null
@@ -131,6 +135,23 @@ class RelayService : Service() {
         lastOutBytes = outBytes
         snapshot = snap
 
+        ticks++
+        if (ticks % STATS_EVERY_TICKS == 0 && (snap.cameraConnected || snap.srt.connected)) {
+            val st = snap.srt
+            logger.log(
+                "Stats : reçu ${snap.inKbps} kb/s · envoyé ${snap.outKbps} kb/s · " +
+                    if (st.connected) {
+                        "SRT sortie ${"%.0f".format(st.sendRateMbps * 1000)} kb/s, RTT ${"%.0f".format(st.rttMs)} ms, " +
+                            "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
+                            "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
+                            "saturations +${st.queueOverflows - lastOverflows}, lien ~${"%.1f".format(st.bandwidthMbps)} Mb/s"
+                    } else "SRT déconnecté"
+            )
+            lastRetrans = st.retransmitted
+            lastDropped = st.dropped
+            lastOverflows = st.queueOverflows
+        }
+
         val camera = if (snap.cameraConnected) "GoPro ✓ ${snap.inKbps} kb/s" else "GoPro ✗"
         val srt = if (snap.srt.connected) "SRT ✓ ${"%.0f".format(snap.srt.rttMs)} ms" else "SRT ✗"
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification("$camera · $srt"))
@@ -164,6 +185,7 @@ class RelayService : Service() {
     companion object {
         private const val CHANNEL_ID = "relay"
         private const val NOTIFICATION_ID = 1
+        private const val STATS_EVERY_TICKS = 5
         private const val ACTION_STOP = "fr.turboirl.app.STOP"
 
         /** The running service, if any. Same process, so the UI just reads it. */
