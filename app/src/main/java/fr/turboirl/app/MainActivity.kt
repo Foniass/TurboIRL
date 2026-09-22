@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var adaptive: CheckBox
     private lateinit var transcode: CheckBox
     private lateinit var outMaxKbps: EditText
+    private lateinit var outMaxHeight: EditText
     private lateinit var goproEnabled: CheckBox
     private lateinit var goproSsid: EditText
     private lateinit var goproPassword: EditText
@@ -57,6 +58,7 @@ class MainActivity : Activity() {
         adaptive = findViewById(R.id.adaptive)
         transcode = findViewById(R.id.transcode)
         outMaxKbps = findViewById(R.id.outMaxKbps)
+        outMaxHeight = findViewById(R.id.outMaxHeight)
         goproEnabled = findViewById(R.id.goproEnabled)
         goproSsid = findViewById(R.id.goproSsid)
         goproPassword = findViewById(R.id.goproPassword)
@@ -75,6 +77,7 @@ class MainActivity : Activity() {
         adaptive.isChecked = config.adaptive
         transcode.isChecked = config.transcode
         outMaxKbps.setText(config.outMaxKbps.toString())
+        outMaxHeight.setText(config.outMaxHeight.toString())
         goproEnabled.isChecked = config.goproEnabled
         goproSsid.setText(config.goproSsid)
         goproPassword.setText(config.goproPassword)
@@ -112,8 +115,9 @@ class MainActivity : Activity() {
             return
         }
         val outMax = outMaxKbps.text.toString().toIntOrNull()
-        if (transcode.isChecked && (outMax == null || outMax !in 500..8000)) {
-            Toast.makeText(this, "Débit vidéo max en sortie entre 500 et 8000 kb/s", Toast.LENGTH_LONG).show()
+        val outH = outMaxHeight.text.toString().toIntOrNull()
+        if (transcode.isChecked && (outMax == null || outMax !in 500..8000 || outH !in setOf(480, 720, 1080))) {
+            Toast.makeText(this, "Débit max entre 500 et 8000 kb/s, résolution max 480, 720 ou 1080", Toast.LENGTH_LONG).show()
             return
         }
         val goproOn = goproEnabled.isChecked
@@ -140,6 +144,7 @@ class MainActivity : Activity() {
             adaptive = adaptive.isChecked,
             transcode = transcode.isChecked,
             outMaxKbps = outMax ?: 3000,
+            outMaxHeight = outH ?: 720,
             goproEnabled = goproOn,
             goproSsid = goproSsid.text.toString().trim(),
             goproPassword = goproPassword.text.toString(),
@@ -153,7 +158,7 @@ class MainActivity : Activity() {
         val service = RelayService.instance
         val running = service != null
         toggle.text = if (running) "Arrêter" else "Démarrer"
-        for (field in listOf(srtHost, srtPort, srtLatency, srtStreamId, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps)) {
+        for (field in listOf(srtHost, srtPort, srtLatency, srtStreamId, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight)) {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running

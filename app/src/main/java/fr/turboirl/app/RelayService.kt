@@ -95,11 +95,11 @@ class RelayService : Service() {
         val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)
         if (config.transcode) {
             val minKbps = 400
-            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 6 / 10).coerceAtLeast(minKbps))
+            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 6 / 10).coerceAtLeast(minKbps), config.outMaxHeight)
             flvRelay.processor = tc
             transcoder = tc
-            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, logger).also { it.start() }
-            logger.log("Réencodage activé : sortie ${minKbps}-${config.outMaxKbps} kb/s adaptée en continu")
+            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, logger).also { it.start() }
+            logger.log("Réencodage activé : sortie ${minKbps}-${config.outMaxKbps} kb/s, jusqu'à ${config.outMaxHeight}p, adaptée en continu")
         }
         try {
             server.start()

@@ -15,15 +15,16 @@ import java.nio.ByteBuffer
 import java.util.ArrayDeque
 
 /**
- * Hardware H.264 → H.264 transcoder: the camera's frames are decoded onto the encoder's input
- * surface (same size) and re-encoded at a bitrate that can change at any time. Frames may be
- * dropped to halve the frame rate when the bitrate is low. Everything codec-related runs on
- * one handler thread.
+ * Hardware H.264 → H.264 transcoder. The camera's frames are decoded onto a [GlScaler], which
+ * draws them at the output resolution into the encoder's input surface. Bitrate changes at any
+ * time; the output resolution can change too (the encoder alone is recreated). Everything
+ * codec-related runs on one handler thread.
  */
 class VideoTranscoder(
     private val sink: EncodedVideoSink,
     private val logger: Logger,
     initialKbps: Int,
+    initialHeight: Int,
 ) : VideoProcessor {
 
     class Stats {
@@ -31,11 +32,14 @@ class VideoTranscoder(
         @Volatile var halfRate = false
         @Volatile var width = 0
         @Volatile var height = 0
+        @Volatile var inputWidth = 0
+        @Volatile var inputHeight = 0
         @Volatile var framesIn = 0L
         @Volatile var framesOut = 0L
         @Volatile var framesDropped = 0L
         @Volatile var bytesOut = 0L
         @Volatile var restarts = 0
+        @Volatile var resolutionChanges = 0
     }
 
     val stats = Stats()
@@ -46,27 +50,28 @@ class VideoTranscoder(
     private val thread = HandlerThread("transcoder").apply { start() }
     private val handler = Handler(thread.looper)
 
+    private var scaler: GlScaler? = null
     private var decoder: MediaCodec? = null
     private var encoder: MediaCodec? = null
-    private var inputSurface: Surface? = null
+    private var encoderSurface: Surface? = null
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
-    private var width = 0
-    private var height = 0
+    private var inWidth = 0
+    private var inHeight = 0
+    private var outHeight = initialHeight
+    private var outWidth = 0
+    @Volatile private var wantedHeight = initialHeight
 
     private class Frame(val data: ByteArray, val ptsUs: Long, val keyframe: Boolean)
 
     private val pending = ArrayDeque<Frame>()
     private val freeInputs = ArrayDeque<Int>()
     private var awaitingKeyframe = true
-    private var frameCounter = 0L
     private var failures = 0
     private var encoderSps: ByteArray? = null
     private var encoderPps: ByteArray? = null
-    private var wantKeyframe = false
 
     @Volatile private var targetKbps = initialKbps
-    @Volatile private var halfRate = false
 
     init {
         stats.bitrateKbps = initialKbps
@@ -76,13 +81,12 @@ class VideoTranscoder(
 
     override fun configure(sps: ByteArray, pps: ByteArray, width: Int, height: Int) {
         handler.post {
-            val same = this.sps?.contentEquals(sps) == true && this.pps?.contentEquals(pps) == true &&
-                this.width == width && this.height == height
+            val same = this.sps?.contentEquals(sps) == true && this.pps?.contentEquals(pps) == true
             this.sps = sps
             this.pps = pps
-            this.width = width
-            this.height = height
-            if (!same || decoder == null) restartCodecs("nouvelle configuration ${width}x$height")
+            inWidth = width
+            inHeight = height
+            if (!same || decoder == null) restartCodecs("caméra en ${width}x$height")
         }
     }
 
@@ -91,9 +95,9 @@ class VideoTranscoder(
         handler.post {
             if (pending.size >= MAX_PENDING) {
                 // Decoder can't keep up: drop up to the next keyframe rather than pile up latency
+                stats.framesDropped += pending.size
                 pending.clear()
                 awaitingKeyframe = true
-                stats.framesDropped++
             }
             pending.addLast(Frame(annexB, ptsMs * 1000, keyframe))
             feedDecoder()
@@ -102,7 +106,6 @@ class VideoTranscoder(
 
     override fun requestKeyframe() {
         handler.post {
-            wantKeyframe = true
             awaitingKeyframe = true
             pending.clear()
             syncFrame()
@@ -110,7 +113,11 @@ class VideoTranscoder(
     }
 
     override fun release() {
-        handler.post { releaseCodecs() }
+        handler.post {
+            releaseCodecs()
+            scaler?.release()
+            scaler = null
+        }
         thread.quitSafely()
     }
 
@@ -130,53 +137,56 @@ class VideoTranscoder(
     }
 
     fun setHalfRate(half: Boolean) {
-        halfRate = half
         stats.halfRate = half
+        scaler?.halfRate = half
+    }
+
+    /** Output height (480 / 720 / 1080); the encoder is recreated when it changes. */
+    fun setOutputHeight(height: Int) {
+        if (height == wantedHeight) return
+        wantedHeight = height
+        handler.post {
+            if (encoder != null && height != outHeight) {
+                outHeight = height
+                stats.resolutionChanges++
+                recreateEncoder("changement de résolution")
+            } else {
+                outHeight = height
+            }
+        }
     }
 
     // ---------------------------------------------------------------- codecs (handler thread)
+
+    private fun outputSize(): Pair<Int, Int> {
+        val h = if (inHeight > 0) minOf(outHeight, inHeight) else outHeight
+        val aspect = if (inWidth > 0 && inHeight > 0) inWidth.toDouble() / inHeight else 16.0 / 9
+        val w = (Math.round(h * aspect / 16.0) * 16).toInt()
+        return w to h
+    }
 
     private fun restartCodecs(reason: String) {
         releaseCodecs()
         val s = sps ?: return
         val p = pps ?: return
         try {
-            val enc = MediaCodec.createEncoderByType(MIME)
-            val encFormat = MediaFormat.createVideoFormat(MIME, width, height).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, targetKbps * 1000)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_SECONDS)
-                setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                val caps = enc.codecInfo.getCapabilitiesForType(MIME).encoderCapabilities
-                if (caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)) {
-                    setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-                }
-                if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            }
-            enc.setCallback(encoderCallback, handler)
-            enc.configure(encFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val surface = enc.createInputSurface()
-            enc.start()
-            encoder = enc
-            inputSurface = surface
+            val sc = scaler ?: GlScaler(logger).also { scaler = it }
+            sc.halfRate = stats.halfRate
+            createEncoder()
 
             val dec = MediaCodec.createDecoderByType(MIME)
-            val decFormat = MediaFormat.createVideoFormat(MIME, width, height).apply {
+            val decFormat = MediaFormat.createVideoFormat(MIME, inWidth, inHeight).apply {
                 setByteBuffer("csd-0", ByteBuffer.wrap(START_CODE + s))
                 setByteBuffer("csd-1", ByteBuffer.wrap(START_CODE + p))
                 if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             dec.setCallback(decoderCallback, handler)
-            dec.configure(decFormat, surface, null, 0)
+            dec.configure(decFormat, sc.inputSurface, null, 0)
             dec.start()
             decoder = dec
-
             awaitingKeyframe = true
-            wantKeyframe = true
-            stats.width = width
-            stats.height = height
-            logger.log("Réencodage démarré : $reason, ${enc.name} → ${targetKbps} kb/s")
+            failures = 0
+            logger.log("Réencodage démarré : $reason → ${outWidth}x${stats.height} à ${targetKbps} kb/s (${encoder?.name})")
         } catch (e: Exception) {
             failures++
             stats.restarts++
@@ -191,25 +201,78 @@ class VideoTranscoder(
         }
     }
 
-    private fun releaseCodecs() {
-        for (c in listOfNotNull(decoder, encoder)) {
+    private fun createEncoder() {
+        val (w, h) = outputSize()
+        val enc = MediaCodec.createEncoderByType(MIME)
+        val format = MediaFormat.createVideoFormat(MIME, w, h).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, targetKbps * 1000)
+            setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_SECONDS)
+            setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+            val caps = enc.codecInfo.getCapabilitiesForType(MIME).encoderCapabilities
+            if (caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)) {
+                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            }
+        }
+        enc.setCallback(encoderCallback, handler)
+        enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        val surface = enc.createInputSurface()
+        enc.start()
+        encoder = enc
+        encoderSurface = surface
+        encoderSps = null
+        encoderPps = null
+        outWidth = w
+        stats.width = w
+        stats.height = h
+        scaler?.setOutput(surface, w, h)
+    }
+
+    private fun recreateEncoder(reason: String) {
+        scaler?.setOutput(null, 0, 0)
+        releaseEncoder()
+        try {
+            createEncoder()
+            logger.log("Encodeur recréé ($reason) → ${outWidth}x${stats.height}")
+        } catch (e: Exception) {
+            logger.log("Encodeur : recréation impossible (${e.message})")
+            onCodecError("encodeur", e)
+        }
+    }
+
+    private fun releaseEncoder() {
+        encoder?.let {
             try {
-                c.stop()
+                it.stop()
             } catch (_: Exception) {
             }
             try {
-                c.release()
+                it.release()
+            } catch (_: Exception) {
+            }
+        }
+        encoder = null
+        encoderSurface?.release()
+        encoderSurface = null
+    }
+
+    private fun releaseCodecs() {
+        scaler?.setOutput(null, 0, 0)
+        decoder?.let {
+            try {
+                it.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                it.release()
             } catch (_: Exception) {
             }
         }
         decoder = null
-        encoder = null
-        inputSurface?.release()
-        inputSurface = null
+        releaseEncoder()
         pending.clear()
         freeInputs.clear()
-        encoderSps = null
-        encoderPps = null
     }
 
     private fun feedDecoder() {
@@ -265,11 +328,8 @@ class VideoTranscoder(
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (codec !== decoder) return
-            frameCounter++
-            val render = info.size > 0 && !(halfRate && frameCounter % 2 == 1L)
-            if (!render && info.size > 0) stats.framesDropped++
             try {
-                codec.releaseOutputBuffer(index, render)
+                codec.releaseOutputBuffer(index, info.size > 0)
             } catch (e: Exception) {
                 onCodecError("décodeur", e)
             }
@@ -283,7 +343,14 @@ class VideoTranscoder(
             if (codec !== decoder) return
             val w = format.getInteger(MediaFormat.KEY_WIDTH)
             val h = format.getInteger(MediaFormat.KEY_HEIGHT)
-            if (w != width || h != height) logger.log("Décodeur : la caméra envoie du ${w}x$h (attendu ${width}x$height)")
+            stats.inputWidth = w
+            stats.inputHeight = h
+            if (w != inWidth || h != inHeight) {
+                logger.log("Décodeur : la caméra envoie du ${w}x$h")
+                inWidth = w
+                inHeight = h
+                if (outputSize().first != outWidth) recreateEncoder("format d'entrée")
+            }
         }
     }
 
@@ -319,8 +386,7 @@ class VideoTranscoder(
 
     /** Splits the encoder's SPS/PPS blob (Annex B) into the two NAL units. */
     private fun parseCodecConfig(data: ByteArray) {
-        val nals = splitNals(data)
-        for (nal in nals) {
+        for (nal in splitNals(data)) {
             when (nal[0].toInt() and 0x1F) {
                 7 -> encoderSps = nal
                 8 -> encoderPps = nal
@@ -345,7 +411,6 @@ class VideoTranscoder(
         for (n in nals) o = putNal(out, o, n)
         stats.framesOut++
         stats.bytesOut += o
-        if (wantKeyframe && keyframe) wantKeyframe = false
         sink.encoded(out, o, ptsMs, keyframe)
     }
 

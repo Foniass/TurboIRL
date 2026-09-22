@@ -105,12 +105,20 @@ Chaque étape isole une inconnue. Après chaque étape, bouton **Partager le jou
 gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "..."
 ```
 
-## Limites connues (MVP)
+## Modes vidéo (au choix dans l'écran)
 
-- Pas de débit adaptatif : si l'upload passe sous le débit de la GoPro, l'appli suspend la
-  vidéo (jusqu'à la prochaine image clé après retour à la normale) mais garde le son. Compteurs
-  « vidéo en pause » et « perdus » dans l'écran État.
+1. **Direct** (défaut) : la vidéo de la GoPro passe telle quelle. Si la 5G sature, la vidéo est
+   suspendue par paliers mais le son continue.
+2. **Débit modulable** (0.8, expérimental) : l'appli freine sa lecture du flux caméra quand le
+   tampon SRT gonfle ; la GoPro baisse alors son propre débit (800 kb/s mini). Sans réencodage.
+3. **Réencodage sur le téléphone** (0.81/0.82) : décodage matériel → redimensionnement OpenGL →
+   encodage matériel à un débit piloté par SRT (400 kb/s → « débit max en sortie »), résolution
+   480p/720p/1080p suivant le débit (« résolution max en sortie »), 15 i/s sous 700 kb/s. Le son
+   de la GoPro passe tel quel. Régler la GoPro en **1080p / 5000 kb/s** pour une meilleure source.
+   Coûte de la batterie et chauffe le téléphone.
+
+## Limites connues
+
 - H.264 + AAC uniquement. Une seule caméra à la fois.
-- Le pilotage Bluetooth n'a pas encore été testé sur une vraie caméra (écrit d'après la spec
-  Open GoPro et le SDK Python officiel) ; les tests unitaires couvrent le codec protobuf et le
-  découpage des paquets BLE.
+- Réencodage et pilotage caméra écrits d'après la doc, à valider sur le terrain ; le journal
+  (« Partager le journal ») contient tout ce qu'il faut pour diagnostiquer.

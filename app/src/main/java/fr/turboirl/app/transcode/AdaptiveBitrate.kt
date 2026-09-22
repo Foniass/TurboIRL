@@ -4,9 +4,10 @@ import fr.turboirl.app.SrtSender
 import fr.turboirl.core.rtmp.Logger
 
 /**
- * Drives the transcoder's bitrate from the SRT sender's state: cut hard as soon as the send
- * buffer builds up (or packets get dropped), climb back slowly once it has stayed empty.
- * Below [LOW_KBPS] the frame rate is halved so that the picture stays legible.
+ * Drives the transcoder from the SRT sender's state: cut the bitrate hard as soon as the send
+ * buffer builds up (or packets get dropped), climb back slowly once it has stayed empty. The
+ * output resolution follows the bitrate (480p / 720p / 1080p) with hysteresis, and below
+ * [LOW_KBPS] the frame rate is halved so that the picture stays legible.
  */
 class AdaptiveBitrate(
     private val srt: SrtSender,
@@ -14,9 +15,13 @@ class AdaptiveBitrate(
     private val latencyMs: Int,
     private val minKbps: Int,
     private val maxKbps: Int,
+    private val maxHeight: Int,
     private val logger: Logger,
 ) {
     @Volatile var targetKbps = 0
+        private set
+
+    @Volatile var height = 0
         private set
 
     @Volatile private var running = false
@@ -45,7 +50,11 @@ class AdaptiveBitrate(
         var lastRaise = 0L
         var drainedSince = 0L
         var lastLog = 0L
+        var candidateSince = 0L
+        var candidate = 0
+        height = ladder(target)
         apply(target)
+        transcoder.setOutputHeight(height)
         try {
             while (running) {
                 Thread.sleep(500)
@@ -85,9 +94,37 @@ class AdaptiveBitrate(
                         logger.log("Encodeur → $target kb/s (tampon SRT $buffer ms, sortie $egressKbps kb/s${if (dropped > 0) ", $dropped perdus" else ""})")
                     }
                 }
+
+                // Resolution: down quickly, up only after the bitrate has held for a while
+                val wanted = ladder(target)
+                if (wanted == height) {
+                    candidateSince = 0
+                } else {
+                    if (wanted != candidate) {
+                        candidate = wanted
+                        candidateSince = now
+                    }
+                    val holdMs = if (wanted < height) 2000 else 8000
+                    if (now - candidateSince >= holdMs) {
+                        logger.log("Résolution de sortie → ${wanted}p (débit $target kb/s)")
+                        height = wanted
+                        transcoder.setOutputHeight(wanted)
+                        candidateSince = 0
+                    }
+                }
             }
         } catch (_: InterruptedException) {
         }
+    }
+
+    private fun ladder(kbps: Int): Int {
+        val up = if (kbps >= height) 12 else 10 // 20 % more required to climb than to stay
+        val h = when {
+            kbps * 10 >= KBPS_1080 * up -> 1080
+            kbps * 10 >= KBPS_720 * up -> 720
+            else -> 480
+        }
+        return minOf(h, maxHeight)
     }
 
     private fun apply(kbps: Int) {
@@ -99,5 +136,7 @@ class AdaptiveBitrate(
     private companion object {
         const val AUDIO_OVERHEAD_KBPS = 200
         const val LOW_KBPS = 700
+        const val KBPS_720 = 900
+        const val KBPS_1080 = 2500
     }
 }

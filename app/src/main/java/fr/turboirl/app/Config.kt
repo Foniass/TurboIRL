@@ -11,6 +11,7 @@ data class Config(
     val adaptive: Boolean,
     val transcode: Boolean,
     val outMaxKbps: Int,
+    val outMaxHeight: Int,
     val goproEnabled: Boolean,
     val goproSsid: String,
     val goproPassword: String,
@@ -29,6 +30,7 @@ data class Config(
             .putBoolean("adaptive", adaptive)
             .putBoolean("transcode", transcode)
             .putInt("outMaxKbps", outMaxKbps)
+            .putInt("outMaxHeight", outMaxHeight)
             .putBoolean("goproEnabled", goproEnabled)
             .putString("goproSsid", goproSsid)
             .putString("goproPassword", goproPassword)
@@ -53,6 +55,7 @@ data class Config(
                 adaptive = p.getBoolean("adaptive", false),
                 transcode = p.getBoolean("transcode", false),
                 outMaxKbps = p.getInt("outMaxKbps", 3000),
+                outMaxHeight = p.getInt("outMaxHeight", 720),
                 goproEnabled = p.getBoolean("goproEnabled", false),
                 goproSsid = p.getString("goproSsid", "").orEmpty(),
                 goproPassword = p.getString("goproPassword", "").orEmpty(),
