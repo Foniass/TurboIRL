@@ -111,11 +111,13 @@ gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "...
    suspendue par paliers mais le son continue.
 2. **Débit modulable** (0.8, expérimental) : l'appli freine sa lecture du flux caméra quand le
    tampon SRT gonfle ; la GoPro baisse alors son propre débit (800 kb/s mini). Sans réencodage.
-3. **Réencodage sur le téléphone** (0.81/0.82) : décodage matériel → redimensionnement OpenGL →
+3. **Réencodage sur le téléphone** (défaut depuis 0.9) : décodage matériel → redimensionnement OpenGL →
    encodage matériel à un débit piloté par SRT (400 kb/s → « débit max en sortie »), résolution
    480p/720p/1080p suivant le débit (« résolution max en sortie »), 15 i/s sous 700 kb/s. Le son
    de la GoPro passe tel quel. Régler la GoPro en **1080p / 5000 kb/s** pour une meilleure source.
-   Coûte de la batterie et chauffe le téléphone.
+   Le son est lui aussi réencodé (AAC 64 kb/s par défaut) pour tenir dans les zones faibles.
+   Réglages par défaut = ceux du test extérieur : réencodage, 3000 kb/s max, 720p max, son 64 kb/s,
+   GoPro pilotée en 720p / 4000 kb/s.
 
 ## Limites connues
 

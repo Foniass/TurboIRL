@@ -25,3 +25,20 @@ fun interface EncodedVideoSink {
     /** One encoded access unit in Annex B (AUD + SPS/PPS on keyframes + slices), no B-frames. */
     fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean)
 }
+
+/** Same idea for audio: raw AAC frames in, ADTS frames (any bitrate) out. */
+interface AudioProcessor {
+    val active: Boolean
+
+    /** [asc] is the AudioSpecificConfig from the camera's AAC sequence header. */
+    fun configure(asc: ByteArray, sampleRate: Int, channels: Int)
+
+    /** One raw AAC frame (no ADTS header), on the relay's output timeline. */
+    fun frame(rawAac: ByteArray, ptsMs: Long)
+
+    fun release()
+}
+
+fun interface EncodedAudioSink {
+    fun encoded(adts: ByteArray, len: Int, ptsMs: Long)
+}

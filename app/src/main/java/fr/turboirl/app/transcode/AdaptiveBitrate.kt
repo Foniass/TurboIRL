@@ -18,6 +18,8 @@ class AdaptiveBitrate(
     private val minKbps: Int,
     private val maxKbps: Int,
     private val maxHeight: Int,
+    /** Audio + TS overhead to leave room for, in kb/s. */
+    private val audioOverheadKbps: Int,
     private val videoSuspended: () -> Boolean,
     private val logger: Logger,
 ) {
@@ -93,7 +95,7 @@ class AdaptiveBitrate(
                     drainedSince = 0
                     if (now - lastCut > 1000) {
                         // Under what the link just carried, minus room for audio + TS overhead
-                        val fromLink = if (egressKbps > 0) (egressKbps - AUDIO_OVERHEAD_KBPS) * 8 / 10 else target
+                        val fromLink = if (egressKbps > 0) (egressKbps - audioOverheadKbps) * 8 / 10 else target
                         target = minOf(target * 7 / 10, fromLink).coerceIn(minKbps, maxKbps)
                         if (dropped > 0) transcoder.requestKeyframe()
                         lastCut = now
@@ -177,7 +179,6 @@ class AdaptiveBitrate(
     }
 
     private companion object {
-        const val AUDIO_OVERHEAD_KBPS = 200
         const val LOW_KBPS = 700
         const val KBPS_720 = 650
         const val KBPS_1080 = 3500

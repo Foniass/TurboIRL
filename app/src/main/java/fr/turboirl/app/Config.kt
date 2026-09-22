@@ -12,6 +12,8 @@ data class Config(
     val transcode: Boolean,
     val outMaxKbps: Int,
     val outMaxHeight: Int,
+    val audioTranscode: Boolean,
+    val audioKbps: Int,
     val goproEnabled: Boolean,
     val goproSsid: String,
     val goproPassword: String,
@@ -31,6 +33,8 @@ data class Config(
             .putBoolean("transcode", transcode)
             .putInt("outMaxKbps", outMaxKbps)
             .putInt("outMaxHeight", outMaxHeight)
+            .putBoolean("audioTranscode", audioTranscode)
+            .putInt("audioKbps", audioKbps)
             .putBoolean("goproEnabled", goproEnabled)
             .putString("goproSsid", goproSsid)
             .putString("goproPassword", goproPassword)
@@ -53,14 +57,16 @@ data class Config(
                 srtStreamId = p.getString("srtStreamId", "").orEmpty(),
                 rtmpPort = p.getInt("rtmpPort", 1935),
                 adaptive = p.getBoolean("adaptive", false),
-                transcode = p.getBoolean("transcode", false),
+                transcode = p.getBoolean("transcode", true),
                 outMaxKbps = p.getInt("outMaxKbps", 3000),
                 outMaxHeight = p.getInt("outMaxHeight", 720),
-                goproEnabled = p.getBoolean("goproEnabled", false),
+                audioTranscode = p.getBoolean("audioTranscode", true),
+                audioKbps = p.getInt("audioKbps", 64),
+                goproEnabled = p.getBoolean("goproEnabled", true),
                 goproSsid = p.getString("goproSsid", "").orEmpty(),
                 goproPassword = p.getString("goproPassword", "").orEmpty(),
                 goproResolution = p.getInt("goproResolution", 720),
-                goproMaxKbps = p.getInt("goproMaxKbps", 2500),
+                goproMaxKbps = p.getInt("goproMaxKbps", 4000),
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
                 goproName = p.getString("goproName", "").orEmpty(),
             )

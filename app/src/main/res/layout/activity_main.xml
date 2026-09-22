@@ -88,6 +88,21 @@
             android:inputType="number"
             android:singleLine="true" />
 
+        <CheckBox
+            android:id="@+id/audioTranscode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Réencoder le son (plus léger, tient dans les zones faibles)" />
+
+        <EditText
+            android:id="@+id/audioKbps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Débit du son (kb/s), ex. 64"
+            android:importantForAutofill="no"
+            android:inputType="number"
+            android:singleLine="true" />
+
         <EditText
             android:id="@+id/outMaxHeight"
             android:layout_width="match_parent"

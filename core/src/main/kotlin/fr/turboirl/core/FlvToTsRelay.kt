@@ -18,10 +18,11 @@ class FlvToTsRelay(
     sink: TsSink,
     private val logger: Logger,
     private val congested: () -> Boolean = { false },
-) : RtmpListener, EncodedVideoSink {
+) : RtmpListener, EncodedVideoSink, EncodedAudioSink {
 
     /** Set before the camera connects; null = the camera's video goes through untouched. */
     @Volatile var processor: VideoProcessor? = null
+    @Volatile var audioProcessor: AudioProcessor? = null
 
     /** With a fixed-bitrate camera, repeated collapses lengthen the hold; a transcoder adapts instead. */
     @Volatile var growingHold = true
@@ -215,6 +216,11 @@ class FlvToTsRelay(
         }
         if (aacProfile < 0 || !started) return
 
+        val ap = audioProcessor
+        if (ap != null && ap.active) {
+            ap.frame(data.copyOfRange(2, data.size), outputTime(timestampMs))
+            return
+        }
         val rawLen = data.size - 2
         val frameLen = rawLen + 7
         if (scratch.size < frameLen) scratch = ByteArray(frameLen)
@@ -228,7 +234,16 @@ class FlvToTsRelay(
         out[6] = 0xFC.toByte()
         System.arraycopy(data, 2, out, 7, rawLen)
 
-        val outMs = outputTime(timestampMs)
+        writeAudioTs(out, frameLen, outputTime(timestampMs))
+    }
+
+    /** Re-encoded audio coming back from the processor (codec thread). */
+    override fun encoded(adts: ByteArray, len: Int, ptsMs: Long) {
+        if (!started) return
+        writeAudioTs(adts, len, ptsMs)
+    }
+
+    private fun writeAudioTs(adts: ByteArray, len: Int, outMs: Long) {
         synchronized(muxer) {
             if (videoSuspended) {
                 val now = System.nanoTime()
@@ -237,7 +252,7 @@ class FlvToTsRelay(
                     muxer.writePcrOnly(outMs * 90)
                 }
             }
-            muxer.writeAudio(out, frameLen, outMs * 90 + PTS_OFFSET)
+            muxer.writeAudio(adts, len, outMs * 90 + PTS_OFFSET)
             stats.tsBytes = muxer.bytesWritten
         }
     }
@@ -305,7 +320,9 @@ class FlvToTsRelay(
         }
         aacProfile = objectType - 1
         muxer.setHasAudio(true)
-        logger.log("Config AAC reçue (${AAC_RATES.getOrElse(aacFreqIndex) { 0 }} Hz, $aacChannels canaux)")
+        val rate = AAC_RATES.getOrElse(aacFreqIndex) { 0 }
+        logger.log("Config AAC reçue ($rate Hz, $aacChannels canaux)")
+        audioProcessor?.configure(data.copyOfRange(2, data.size), rate, aacChannels)
     }
 
     private inline fun forEachNal(data: ByteArray, block: (off: Int, len: Int) -> Unit) {

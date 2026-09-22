@@ -17,6 +17,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import fr.turboirl.app.gopro.GoProController
 import fr.turboirl.app.transcode.AdaptiveBitrate
+import fr.turboirl.app.transcode.AudioTranscoder
 import fr.turboirl.app.transcode.VideoTranscoder
 import fr.turboirl.core.FlvToTsRelay
 import fr.turboirl.core.rtmp.RtmpServer
@@ -52,6 +53,7 @@ class RelayService : Service() {
     private var governor: BitrateGovernor? = null
     private var transcoder: VideoTranscoder? = null
     private var abr: AdaptiveBitrate? = null
+    private var audioTranscoder: AudioTranscoder? = null
     private var lastEncBytes = 0L
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -100,8 +102,14 @@ class RelayService : Service() {
             flvRelay.processor = tc
             flvRelay.growingHold = false
             transcoder = tc
-            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
-            logger.log("Réencodage activé : sortie ${minKbps}-${config.outMaxKbps} kb/s, jusqu'à ${config.outMaxHeight}p, adaptée en continu")
+            val audioKbps = if (config.audioTranscode) config.audioKbps else 128
+            if (config.audioTranscode) {
+                val at = AudioTranscoder(flvRelay, logger, config.audioKbps)
+                flvRelay.audioProcessor = at
+                audioTranscoder = at
+            }
+            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, audioKbps * 13 / 10 + 40, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
+            logger.log("Réencodage activé : vidéo ${minKbps}-${config.outMaxKbps} kb/s jusqu'à ${config.outMaxHeight}p" + (if (config.audioTranscode) ", son ${config.audioKbps} kb/s" else ", son d'origine"))
         }
         try {
             server.start()
@@ -156,7 +164,9 @@ class RelayService : Service() {
         val controller = gopro
         val gov = governor
         val tc = transcoder
+        val at = audioTranscoder
         val ab = abr
+        audioTranscoder = null
         governor = null
         transcoder = null
         abr = null
@@ -169,6 +179,7 @@ class RelayService : Service() {
             ab?.stop()
             gov?.stop()
             tc?.release()
+            at?.release()
             controller?.stop()
             server?.stop()
             sender?.stop()
