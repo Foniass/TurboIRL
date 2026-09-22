@@ -75,12 +75,17 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
 
 ### 3. GoPro Hero 12
 
-Dans Quik : Live → RTMP → choisir le Wi-Fi du hotspot → coller l'URL affichée par l'appli
-(`rtmp://<ip du hotspot>:1935/live/gopro`). Commencer en 720p ou 1080p avec le débit le plus bas
-proposé : le flux n'est pas réencodé, donc c'est le débit de la GoPro qui doit passer en 4G.
+**Pilotage automatique (recommandé)** : cocher « L'appli connecte la GoPro… », saisir le nom et
+le mot de passe du hotspot du téléphone, la résolution (720) et le débit max (2500), Démarrer.
+La première fois : mettre la caméra en mode appairage (*Préférences → Connexions → Connecter un
+appareil → Application GoPro Quik*) et accepter la demande d'appairage Bluetooth sur le téléphone.
+Fermer Quik pendant ce temps (une seule appli peut tenir la caméra en Bluetooth). Ensuite l'appli
+se reconnecte seule, enregistre le hotspot dans la caméra, configure le live (Open GoPro) vers
+l'adresse courante du hotspot, le démarre et le relance s'il tombe.
 
-Android peut changer l'IP du hotspot d'une session à l'autre : vérifier l'URL affichée si la
-GoPro ne se connecte plus.
+**À la main (secours)** : dans Quik, Live → RTMP → Wi-Fi du hotspot → coller l'URL affichée par
+l'appli (`rtmp://<ip du hotspot>:1935/live/gopro`). Android peut changer l'IP du hotspot d'une
+session à l'autre : vérifier l'URL si la GoPro ne se connecte plus.
 
 ## Protocole de test
 
@@ -106,4 +111,6 @@ gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "...
   vidéo (jusqu'à la prochaine image clé après retour à la normale) mais garde le son. Compteurs
   « vidéo en pause » et « perdus » dans l'écran État.
 - H.264 + AAC uniquement. Une seule caméra à la fois.
-- La GoPro se configure à la main ; le pilotage Bluetooth (Open GoPro) est l'étape suivante.
+- Le pilotage Bluetooth n'a pas encore été testé sur une vraie caméra (écrit d'après la spec
+  Open GoPro et le SDK Python officiel) ; les tests unitaires couvrent le codec protobuf et le
+  découpage des paquets BLE.

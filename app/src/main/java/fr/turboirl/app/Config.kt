@@ -8,6 +8,13 @@ data class Config(
     val srtLatencyMs: Int,
     val srtStreamId: String,
     val rtmpPort: Int,
+    val goproEnabled: Boolean,
+    val goproSsid: String,
+    val goproPassword: String,
+    val goproResolution: Int,
+    val goproMaxKbps: Int,
+    val goproAddress: String,
+    val goproName: String,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -16,6 +23,13 @@ data class Config(
             .putInt("srtLatencyMs", srtLatencyMs)
             .putString("srtStreamId", srtStreamId)
             .putInt("rtmpPort", rtmpPort)
+            .putBoolean("goproEnabled", goproEnabled)
+            .putString("goproSsid", goproSsid)
+            .putString("goproPassword", goproPassword)
+            .putInt("goproResolution", goproResolution)
+            .putInt("goproMaxKbps", goproMaxKbps)
+            .putString("goproAddress", goproAddress)
+            .putString("goproName", goproName)
             .apply()
     }
 
@@ -30,6 +44,13 @@ data class Config(
                 srtLatencyMs = p.getInt("srtLatencyMs", 2000),
                 srtStreamId = p.getString("srtStreamId", "").orEmpty(),
                 rtmpPort = p.getInt("rtmpPort", 1935),
+                goproEnabled = p.getBoolean("goproEnabled", false),
+                goproSsid = p.getString("goproSsid", "").orEmpty(),
+                goproPassword = p.getString("goproPassword", "").orEmpty(),
+                goproResolution = p.getInt("goproResolution", 720),
+                goproMaxKbps = p.getInt("goproMaxKbps", 2500),
+                goproAddress = p.getString("goproAddress", "").orEmpty(),
+                goproName = p.getString("goproName", "").orEmpty(),
             )
         }
     }

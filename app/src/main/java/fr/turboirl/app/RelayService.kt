@@ -15,6 +15,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import fr.turboirl.app.gopro.GoProController
 import fr.turboirl.core.FlvToTsRelay
 import fr.turboirl.core.rtmp.RtmpServer
 
@@ -31,6 +32,7 @@ class RelayService : Service() {
         val videoSuspended: Boolean,
         val videoSuspensions: Int,
         val videoSuspendedMs: Long,
+        val gopro: GoProController?,
         val srt: SrtSender.Stats,
     )
 
@@ -40,6 +42,7 @@ class RelayService : Service() {
     private var rtmpServer: RtmpServer? = null
     private var relay: FlvToTsRelay? = null
     private var srtSender: SrtSender? = null
+    private var gopro: GoProController? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var lastInBytes = 0L
@@ -92,6 +95,29 @@ class RelayService : Service() {
         lastError = null
         logger.log("Relais démarré → srt://${config.srtHost}:${config.srtPort}")
 
+        if (config.goproEnabled) {
+            val controller = GoProController(
+                this,
+                GoProController.Settings(
+                    ssid = config.goproSsid, password = config.goproPassword,
+                    resolution = config.goproResolution, maxKbps = config.goproMaxKbps,
+                    knownAddress = config.goproAddress.ifEmpty { null },
+                ),
+                logger,
+                rtmpUrl = {
+                    NetUtil.localAddresses().firstOrNull { NetUtil.isHotspot(it.iface) }
+                        ?.let { "rtmp://${it.ip}:${config.rtmpPort}/live/gopro" }
+                },
+                cameraPublishing = { flvRelay.stats.publishing },
+                onDeviceLearnt = { address, name ->
+                    Config.load(this).copy(goproAddress = address, goproName = name).save(this)
+                },
+            )
+            controller.start()
+            gopro = controller
+            logger.log("Pilotage GoPro activé (hotspot « ${config.goproSsid} »)")
+        }
+
         lastTickNs = System.nanoTime()
         handler.postDelayed(::tick, 1000)
         return START_STICKY
@@ -101,11 +127,14 @@ class RelayService : Service() {
         handler.removeCallbacksAndMessages(null)
         val server = rtmpServer
         val sender = srtSender
+        val controller = gopro
         rtmpServer = null
         srtSender = null
         relay = null
+        gopro = null
         // Socket teardown can block for a few seconds: keep it off the main thread.
         Thread {
+            controller?.stop()
             server?.stop()
             sender?.stop()
         }.start()
@@ -135,6 +164,7 @@ class RelayService : Service() {
             videoSuspended = stats.videoSuspended,
             videoSuspensions = stats.videoSuspensions,
             videoSuspendedMs = stats.videoSuspendedMs,
+            gopro = gopro,
             srt = sender.stats,
         )
         lastInBytes = inBytes

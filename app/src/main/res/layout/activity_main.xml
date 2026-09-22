@@ -83,6 +83,75 @@
 
         <TextView
             style="@style/SectionTitle"
+            android:text="Pilotage de la GoPro en Bluetooth" />
+
+        <CheckBox
+            android:id="@+id/goproEnabled"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="L'appli connecte la GoPro au hotspot et lance le live toute seule" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/goproSsid"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Nom du hotspot (SSID)"
+                android:importantForAutofill="no"
+                android:inputType="textNoSuggestions"
+                android:singleLine="true" />
+
+            <EditText
+                android:id="@+id/goproPassword"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Mot de passe du hotspot"
+                android:importantForAutofill="no"
+                android:inputType="textVisiblePassword"
+                android:singleLine="true" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/goproResolution"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Résolution (480/720/1080)"
+                android:importantForAutofill="no"
+                android:inputType="number"
+                android:singleLine="true" />
+
+            <EditText
+                android:id="@+id/goproMaxKbps"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Débit max (kb/s)"
+                android:importantForAutofill="no"
+                android:inputType="number"
+                android:singleLine="true" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/goproStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textSize="14sp" />
+
+        <TextView
+            style="@style/SectionTitle"
             android:text="URL à régler dans la GoPro" />
 
         <TextView

@@ -13,6 +13,8 @@ object NetUtil {
     // Usual soft AP interface names (MediaTek: ap0, Qualcomm: wlan1/swlan0/softap0)
     private val HOTSPOT = listOf("ap", "swlan", "softap", "wlan1", "wlan2")
 
+    fun isHotspot(iface: String): Boolean = HOTSPOT.any { iface.startsWith(it) }
+
     /** IPv4 addresses the camera could stream to, most likely hotspot interface first. */
     fun localAddresses(): List<LocalAddress> {
         val result = ArrayList<LocalAddress>()
@@ -28,6 +30,6 @@ object NetUtil {
             }
         } catch (_: Exception) {
         }
-        return result.sortedBy { a -> if (HOTSPOT.any { a.iface.startsWith(it) }) 0 else 1 }
+        return result.sortedBy { a -> if (isHotspot(a.iface)) 0 else 1 }
     }
 }
