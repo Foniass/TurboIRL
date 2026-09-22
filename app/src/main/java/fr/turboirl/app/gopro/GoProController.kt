@@ -103,13 +103,19 @@ class GoProController(
                     break
                 } catch (e: Exception) {
                     if (!running) break
-                    failures++
                     val msg = e.message ?: e.javaClass.simpleName
-                    logger.log("GoPro : $msg")
                     set(State.ERROR, msg)
-                    stopKeepAlive()
-                    ble.close()
-                    Thread.sleep(minOf(5000L * failures, 30_000L))
+                    if (ble.connected) {
+                        // The camera is still with us (hotspot not visible yet, live refused…): just try again.
+                        logger.log("GoPro : $msg — nouvel essai dans 5 s")
+                        Thread.sleep(5000)
+                    } else {
+                        failures++
+                        logger.log("GoPro : $msg")
+                        stopKeepAlive()
+                        ble.close()
+                        Thread.sleep(minOf(5000L * failures, 30_000L))
+                    }
                     set(State.RETRYING)
                 }
             }
