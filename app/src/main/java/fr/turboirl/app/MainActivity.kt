@@ -95,11 +95,12 @@ class MainActivity : Activity() {
         battery.setOnClickListener { requestBatteryExemption() }
         share.setOnClickListener { shareLog() }
 
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
+        val wanted = ArrayList<String>()
+        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
+        wanted.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        wanted.add(Manifest.permission.READ_PHONE_STATE)
+        val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
 
     override fun onResume() {
@@ -234,10 +235,12 @@ class MainActivity : Activity() {
     }
 
     private fun shareLog() {
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", AppLog.exportForShare())
-        val send = Intent(Intent.ACTION_SEND)
-            .setType("text/plain")
-            .putExtra(Intent.EXTRA_STREAM, uri)
+        val uris = ArrayList<Uri>()
+        uris.add(FileProvider.getUriForFile(this, "$packageName.files", AppLog.exportForShare()))
+        for (f in AppLog.extraFiles(this)) uris.add(FileProvider.getUriForFile(this, "$packageName.files", f))
+        val send = Intent(Intent.ACTION_SEND_MULTIPLE)
+            .setType("text/*")
+            .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
             .putExtra(Intent.EXTRA_SUBJECT, "Journal TurboIRL")
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(Intent.createChooser(send, "Envoyer le journal"))

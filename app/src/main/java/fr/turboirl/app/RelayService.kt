@@ -55,6 +55,7 @@ class RelayService : Service() {
     private var abr: AdaptiveBitrate? = null
     private var audioTranscoder: AudioTranscoder? = null
     private var lastEncBytes = 0L
+    private var telemetry: Telemetry? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var lastInBytes = 0L
@@ -79,10 +80,12 @@ class RelayService : Service() {
         if (intent == null) logger.log("Service relancé par le système après un arrêt forcé")
         if (rtmpServer != null) return START_STICKY // already running
 
-        ServiceCompat.startForeground(
-            this, NOTIFICATION_ID, buildNotification("Démarrage…"),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-        )
+        val tele = Telemetry(this)
+        var fgType = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        if (tele.hasLocationPermission) fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification("Démarrage…"), fgType)
+        tele.start()
+        telemetry = tele
         instance = this
 
         // After a system restart the intent is null: the saved config is the source of truth.
@@ -159,6 +162,8 @@ class RelayService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        telemetry?.stop()
+        telemetry = null
         val server = rtmpServer
         val sender = srtSender
         val controller = gopro
@@ -220,6 +225,7 @@ class RelayService : Service() {
         lastInBytes = inBytes
         lastOutBytes = outBytes
         snapshot = snap
+        telemetry?.row(snap)
 
         ticks++
         if (ticks % STATS_EVERY_TICKS == 0 && (snap.cameraConnected || snap.srt.connected)) {

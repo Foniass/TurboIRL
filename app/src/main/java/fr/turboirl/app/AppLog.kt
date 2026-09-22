@@ -53,6 +53,10 @@ object AppLog {
     fun recent(): String = lines.joinToString("\n")
 
     /** Concatenates the rotated and current journal into one file to hand to a share intent. */
+    /** Extra files to ship along with the journal (telemetry). */
+    fun extraFiles(context: Context): List<File> =
+        listOf(File(context.filesDir, "telemetrie-precedente.csv"), File(context.filesDir, "telemetrie.csv")).filter { it.exists() && it.length() > 0 }
+
     @Synchronized
     fun exportForShare(): File {
         shareFile.outputStream().use { out ->
