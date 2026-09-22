@@ -377,7 +377,8 @@ class GoProController(
         m.int(4)?.let {
             if (it != cameraBitrateKbps) {
                 cameraBitrateKbps = it
-                logger.log("GoPro : débit d'encodage $it kb/s")
+                // While the camera reconnects the value flaps 0/2500 every second: not worth a line each
+                if (liveStatus == LIVE_STREAMING && it > 0) logger.log("GoPro : débit d'encodage $it kb/s")
             }
         }
     }

@@ -50,6 +50,8 @@ class FlvToTsRelay(
     private var started = false // true once a keyframe went out in this session
     private var videoSuspended = false
     private var suspendedAtNs = 0L
+    private var resumedAtNs = 0L
+    private var holdMs = MIN_HOLD_MS // minimum suspension, grows when the link keeps collapsing right after a resume
     private var lastPcrOnlyNs = 0L
     private var sessionFirstTs = -1L
     private var sessionOffsetMs = 0L
@@ -118,19 +120,24 @@ class FlvToTsRelay(
             if (!keyframe) return
             started = true
         }
+        val nowNs = System.nanoTime()
         if (videoSuspended) {
-            if (congested() || !keyframe) return
+            val ms = (nowNs - suspendedAtNs) / 1_000_000
+            if (congested() || !keyframe || ms < holdMs) return
             videoSuspended = false
             stats.videoSuspended = false
-            val ms = (System.nanoTime() - suspendedAtNs) / 1_000_000
             stats.videoSuspendedMs += ms
+            resumedAtNs = nowNs
             logger.log("Vidéo reprise après ${"%.1f".format(ms / 1000.0)} s")
         } else if (congested()) {
+            // Collapsing again right after a resume: the link cannot carry video, hold it off longer.
+            val sinceResume = (nowNs - resumedAtNs) / 1_000_000
+            holdMs = if (resumedAtNs != 0L && sinceResume < RELAPSE_WINDOW_MS) minOf(holdMs * 2, MAX_HOLD_MS) else MIN_HOLD_MS
             videoSuspended = true
             stats.videoSuspended = true
             stats.videoSuspensions++
-            suspendedAtNs = System.nanoTime()
-            logger.log("Liaison saturée : vidéo suspendue, le son continue")
+            suspendedAtNs = nowNs
+            logger.log("Liaison saturée : vidéo suspendue (${holdMs / 1000} s minimum), le son continue")
             return
         }
         // signed 24-bit composition time offset
@@ -290,6 +297,9 @@ class FlvToTsRelay(
     private companion object {
         const val PTS_OFFSET = 45_000L // 0.5 s of headroom between PCR and DTS
         const val PCR_ONLY_INTERVAL_NS = 100_000_000L
+        const val MIN_HOLD_MS = 5_000L
+        const val MAX_HOLD_MS = 60_000L
+        const val RELAPSE_WINDOW_MS = 15_000L
         val AUD = byteArrayOf(0x09, 0xF0.toByte())
         val AAC_RATES = intArrayOf(96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
     }
