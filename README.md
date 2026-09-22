@@ -119,6 +119,14 @@ gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "...
    Réglages par défaut = ceux du test extérieur : réencodage, 3000 kb/s max, 720p max, son 64 kb/s,
    GoPro pilotée en 720p / 4000 kb/s.
 
+## Réception : règle importante
+
+OBS (source multimédia) perd sa synchro audio de façon durable dès que la vidéo s'interrompt
+quelques secondes, même si l'audio est continu (reproduit sur PC : `core --congest 40:5` hache le
+son dans OBS, `--trickle` non). L'appli ne laisse donc jamais de trou vidéo : mode dégradé
+(150 kb/s, 5 i/s) avec le réencodeur, image clé par seconde en direct. Si OBS hache quand même,
+désactiver/réactiver la source le remet d'aplomb.
+
 ## Limites connues
 
 - H.264 + AAC uniquement. Une seule caméra à la fois.
