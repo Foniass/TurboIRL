@@ -125,7 +125,9 @@ OBS (source multimédia) perd sa synchro audio de façon durable dès que la vid
 quelques secondes, même si l'audio est continu (reproduit sur PC : `core --congest 40:5` hache le
 son dans OBS, `--trickle` non). L'appli ne laisse donc jamais de trou vidéo : mode dégradé
 (150 kb/s, 5 i/s) avec le réencodeur, image clé par seconde en direct. Si OBS hache quand même,
-désactiver/réactiver la source le remet d'aplomb.
+désactiver/réactiver la source le remet d'aplomb. En plus, `tools/recv.ps1` réencode le flux vers OBS en
+cadence constante (dernière image répétée, silence inséré) : même une coupure totale du réseau ou un
+redémarrage de la caméra ne crée pas de trou côté OBS (vérifié : test A haché, test C propre).
 
 ## Limites connues
 
