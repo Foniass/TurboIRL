@@ -25,6 +25,7 @@ data class Config(
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("latencyV2", true)
             .putString("srtHost", srtHost)
             .putInt("srtPort", srtPort)
             .putInt("srtLatencyMs", srtLatencyMs)
@@ -55,7 +56,8 @@ data class Config(
             return Config(
                 srtHost = p.getString("srtHost", "").orEmpty(),
                 srtPort = p.getInt("srtPort", 9000),
-                srtLatencyMs = p.getInt("srtLatencyMs", 2000),
+                // 8 s of SRT latency: short 4G dips are absorbed instead of freezing (≈ 15 s end to end)
+                srtLatencyMs = if (p.contains("latencyV2")) p.getInt("srtLatencyMs", 8000) else 8000,
                 srtStreamId = p.getString("srtStreamId", "").orEmpty(),
                 rtmpPort = p.getInt("rtmpPort", 1935),
                 adaptive = p.getBoolean("adaptive", false),

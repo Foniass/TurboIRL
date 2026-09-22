@@ -12,6 +12,8 @@ import android.location.LocationManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyDisplayInfo
 import android.telephony.TelephonyManager
 import java.io.File
 import java.io.IOException
@@ -33,6 +35,8 @@ class Telemetry(private val context: Context) {
     private val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
 
     @Volatile private var location: Location? = null
+    @Volatile private var displayNetwork = ""
+    private var displayCallback: TelephonyCallback? = null
     private val locationListener = LocationListener { location = it }
 
     private var lastRetrans = 0L
@@ -55,6 +59,27 @@ class Telemetry(private val context: Context) {
             )
         }
         write("# session ${SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRANCE).format(Date())}\n")
+        if (Build.VERSION.SDK_INT >= 31 &&
+            context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        ) {
+            try {
+                // Orange 5G is NSA: the data type says LTE while the phone shows 5G; this callback tells the truth
+                val cb = object : TelephonyCallback(), TelephonyCallback.DisplayInfoListener {
+                    override fun onDisplayInfoChanged(info: TelephonyDisplayInfo) {
+                        displayNetwork = when (info.overrideNetworkType) {
+                            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_NSA -> "5G NSA"
+                            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_NR_ADVANCED -> "5G+"
+                            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_CA -> "4G+"
+                            TelephonyDisplayInfo.OVERRIDE_NETWORK_TYPE_LTE_ADVANCED_PRO -> "4G++"
+                            else -> ""
+                        }
+                    }
+                }
+                telephony.registerTelephonyCallback(context.mainExecutor, cb)
+                displayCallback = cb
+            } catch (_: Exception) {
+            }
+        }
         if (hasLocationPermission) {
             try {
                 for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
@@ -72,6 +97,8 @@ class Telemetry(private val context: Context) {
             locationManager.removeUpdates(locationListener)
         } catch (_: Exception) {
         }
+        if (Build.VERSION.SDK_INT >= 31) displayCallback?.let { telephony.unregisterTelephonyCallback(it) }
+        displayCallback = null
     }
 
     fun files(): List<File> = listOf(previous, file).filter { it.exists() && it.length() > 0 }
@@ -98,7 +125,7 @@ class Telemetry(private val context: Context) {
         try {
             dbm = telephony.signalStrength?.cellSignalStrengths?.firstOrNull()?.dbm?.toString().orEmpty()
             if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                network = networkName(telephony.dataNetworkType)
+                network = displayNetwork.ifEmpty { networkName(telephony.dataNetworkType) }
             }
         } catch (_: Exception) {
         }

@@ -51,8 +51,9 @@ class AdaptiveBitrate(
     }
 
     private fun loop() {
-        val hiMs = latencyMs / 5      // 400 ms at 2 s: react well before audio priority (60 %) has to
-        val loMs = latencyMs / 20     // 100 ms: considered drained
+        // With a long latency budget, short dips are meant to be absorbed: only brake once a real backlog forms
+        val hiMs = (latencyMs / 4).coerceIn(400, 2500)
+        val loMs = (latencyMs / 20).coerceIn(100, 500)
         var target = (maxKbps * 4 / 10).coerceIn(minKbps, maxKbps)
         var lastDropped = srt.stats.dropped
         var lastCut = 0L
@@ -65,6 +66,7 @@ class AdaptiveBitrate(
         var lastSwitch = 0L
         val outSamples = ArrayDeque<Pair<Long, Long>>() // (time ms, bytesOut)
         var lastCorrectionLog = 0L
+        var lastTargetChange = 0L
         height = ladder(target, 0)
         apply(target)
         transcoder.setOutputHeight(height)
@@ -79,6 +81,8 @@ class AdaptiveBitrate(
                     target = minKbps
                     apply(target)
                     lastCut = now
+                    lastTargetChange = now
+                    outSamples.clear()
                     logger.log("Encodeur ramené à $minKbps kb/s (vidéo suspendue)")
                 }
                 wasSuspended = suspended
@@ -110,17 +114,23 @@ class AdaptiveBitrate(
                     drainedSince = 0
                 }
 
-                // Measured output vs requested: MediaTek's encoder overshoots (×2 at 1080p)
+                // Measured output vs requested: MediaTek's encoder (VBR only) overshoots on busy scenes.
+                // Only judged once the target has been stable for a while, else the window still
+                // holds output produced for the previous target and the correction spirals down.
+                if (target != before) {
+                    lastTargetChange = now
+                    outSamples.clear()
+                }
                 outSamples.addLast(now to transcoder.stats.bytesOut)
                 while (outSamples.size > 1 && now - outSamples.first().first > 3000) outSamples.removeFirst()
                 val oldest = outSamples.first()
-                if (!suspended && now - oldest.first >= 2000) {
+                if (!suspended && now - lastTargetChange >= 3000 && now - oldest.first >= 2000) {
                     val measuredKbps = ((transcoder.stats.bytesOut - oldest.second) * 8 / (now - oldest.first)).toInt()
                     val requested = (target * correction).toInt()
                     if (measuredKbps > requested * 125 / 100 && measuredKbps > minKbps) {
-                        correction = (correction * 0.9).coerceAtLeast(0.35)
-                    } else if (measuredKbps < requested * 85 / 100 && correction < 1.0) {
-                        correction = (correction * 1.03).coerceAtMost(1.0)
+                        correction = (correction * 0.93).coerceAtLeast(0.6)
+                    } else if (measuredKbps < requested * 90 / 100 && correction < 1.0) {
+                        correction = (correction * 1.05).coerceAtMost(1.0)
                     }
                     if (now - lastCorrectionLog > 10_000 && correction < 0.95) {
                         lastCorrectionLog = now

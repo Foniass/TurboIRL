@@ -356,7 +356,7 @@ class FlvToTsRelay(
         const val PTS_OFFSET = 45_000L // 0.5 s of headroom between PCR and DTS
         const val PCR_ONLY_INTERVAL_NS = 100_000_000L
         const val MIN_HOLD_MS = 5_000L
-        const val SHORT_HOLD_MS = 1_000L
+        const val SHORT_HOLD_MS = 3_000L
         const val MAX_HOLD_MS = 60_000L
         const val RELAPSE_WINDOW_MS = 15_000L
         val AUD = byteArrayOf(0x09, 0xF0.toByte())
