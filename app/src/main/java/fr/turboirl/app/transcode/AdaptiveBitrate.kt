@@ -5,9 +5,11 @@ import fr.turboirl.core.rtmp.Logger
 
 /**
  * Drives the transcoder from the SRT sender's state: cut the bitrate hard as soon as the send
- * buffer builds up (or packets get dropped), climb back slowly once it has stayed empty. The
- * output resolution follows the bitrate (480p / 720p / 1080p) with hysteresis, and below
- * [LOW_KBPS] the frame rate is halved so that the picture stays legible.
+ * buffer builds up (or packets get dropped), climb back once it has stayed empty. Never climbs
+ * while video is withheld, and restarts from the floor when it comes back. The encoder's real
+ * output is measured and the requested bitrate corrected when the hardware overshoots.
+ * The output resolution follows the bitrate with a strong hysteresis; below [LOW_KBPS] the
+ * frame rate is halved so that the picture stays legible.
  */
 class AdaptiveBitrate(
     private val srt: SrtSender,
@@ -16,12 +18,17 @@ class AdaptiveBitrate(
     private val minKbps: Int,
     private val maxKbps: Int,
     private val maxHeight: Int,
+    private val videoSuspended: () -> Boolean,
     private val logger: Logger,
 ) {
     @Volatile var targetKbps = 0
         private set
 
     @Volatile var height = 0
+        private set
+
+    /** Requested / measured ratio applied to the encoder setting (1 = encoder is honest). */
+    @Volatile var correction = 1.0
         private set
 
     @Volatile private var running = false
@@ -42,17 +49,21 @@ class AdaptiveBitrate(
     }
 
     private fun loop() {
-        val hiMs = latencyMs / 5      // 400 ms at 2 s: react well before audio priority (40 %) has to
+        val hiMs = latencyMs / 5      // 400 ms at 2 s: react well before audio priority (60 %) has to
         val loMs = latencyMs / 20     // 100 ms: considered drained
-        var target = (maxKbps * 6 / 10).coerceIn(minKbps, maxKbps)
+        var target = (maxKbps * 4 / 10).coerceIn(minKbps, maxKbps)
         var lastDropped = srt.stats.dropped
         var lastCut = 0L
         var lastRaise = 0L
         var drainedSince = 0L
         var lastLog = 0L
-        var candidateSince = 0L
+        var wasSuspended = false
         var candidate = 0
-        height = ladder(target)
+        var candidateSince = 0L
+        var lastSwitch = 0L
+        val outSamples = ArrayDeque<Pair<Long, Long>>() // (time ms, bytesOut)
+        var lastCorrectionLog = 0L
+        height = ladder(target, 0)
         apply(target)
         transcoder.setOutputHeight(height)
         try {
@@ -60,6 +71,15 @@ class AdaptiveBitrate(
                 Thread.sleep(500)
                 val st = srt.stats
                 val now = System.currentTimeMillis()
+                val suspended = videoSuspended()
+                if (suspended && !wasSuspended) {
+                    // Audio priority took over: start again from the floor when video comes back
+                    target = minKbps
+                    apply(target)
+                    lastCut = now
+                    logger.log("Encodeur ramené à $minKbps kb/s (vidéo suspendue)")
+                }
+                wasSuspended = suspended
                 if (!st.connected) {
                     drainedSince = 0
                     continue
@@ -78,25 +98,44 @@ class AdaptiveBitrate(
                         if (dropped > 0) transcoder.requestKeyframe()
                         lastCut = now
                     }
-                } else if (buffer < loMs) {
+                } else if (buffer < loMs && !suspended) {
                     if (drainedSince == 0L) drainedSince = now
-                    if (now - drainedSince > 3000 && now - lastCut > 4000 && now - lastRaise > 2000) {
-                        target = (target * 11 / 10 + 50).coerceIn(minKbps, maxKbps)
+                    if (now - drainedSince > 2000 && now - lastCut > 3000 && now - lastRaise > 1500) {
+                        target = (target * 115 / 100 + 50).coerceIn(minKbps, maxKbps)
                         lastRaise = now
                     }
                 } else {
                     drainedSince = 0
                 }
-                if (target != before) {
+
+                // Measured output vs requested: MediaTek's encoder overshoots (×2 at 1080p)
+                outSamples.addLast(now to transcoder.stats.bytesOut)
+                while (outSamples.size > 1 && now - outSamples.first().first > 3000) outSamples.removeFirst()
+                val oldest = outSamples.first()
+                if (!suspended && now - oldest.first >= 2000) {
+                    val measuredKbps = ((transcoder.stats.bytesOut - oldest.second) * 8 / (now - oldest.first)).toInt()
+                    val requested = (target * correction).toInt()
+                    if (measuredKbps > requested * 125 / 100 && measuredKbps > minKbps) {
+                        correction = (correction * 0.9).coerceAtLeast(0.35)
+                    } else if (measuredKbps < requested * 85 / 100 && correction < 1.0) {
+                        correction = (correction * 1.03).coerceAtMost(1.0)
+                    }
+                    if (now - lastCorrectionLog > 10_000 && correction < 0.95) {
+                        lastCorrectionLog = now
+                        logger.log("Encodeur : ${measuredKbps} kb/s mesurés pour $requested demandés, correction ×${"%.2f".format(correction)}")
+                    }
+                }
+
+                if (target != before || correction != lastApplied) {
                     apply(target)
-                    if (target < before || now - lastLog > 10_000) {
+                    if (target != before && (target < before || now - lastLog > 10_000)) {
                         lastLog = now
                         logger.log("Encodeur → $target kb/s (tampon SRT $buffer ms, sortie $egressKbps kb/s${if (dropped > 0) ", $dropped perdus" else ""})")
                     }
                 }
 
-                // Resolution: down quickly, up only after the bitrate has held for a while
-                val wanted = ladder(target)
+                // Resolution: down after 3 s, up after 20 s, never twice within 30 s
+                val wanted = ladder(target, height)
                 if (wanted == height) {
                     candidateSince = 0
                 } else {
@@ -104,10 +143,11 @@ class AdaptiveBitrate(
                         candidate = wanted
                         candidateSince = now
                     }
-                    val holdMs = if (wanted < height) 2000 else 8000
-                    if (now - candidateSince >= holdMs) {
+                    val holdMs = if (wanted < height) 3000 else 20_000
+                    if (now - candidateSince >= holdMs && now - lastSwitch >= 30_000 && !suspended) {
                         logger.log("Résolution de sortie → ${wanted}p (débit $target kb/s)")
                         height = wanted
+                        lastSwitch = now
                         transcoder.setOutputHeight(wanted)
                         candidateSince = 0
                     }
@@ -117,26 +157,29 @@ class AdaptiveBitrate(
         }
     }
 
-    private fun ladder(kbps: Int): Int {
-        val up = if (kbps >= height) 12 else 10 // 20 % more required to climb than to stay
+    /** 480p under ~650 kb/s, 1080p only above ~3500 kb/s sustained, 720p otherwise. */
+    private fun ladder(kbps: Int, current: Int): Int {
         val h = when {
-            kbps * 10 >= KBPS_1080 * up -> 1080
-            kbps * 10 >= KBPS_720 * up -> 720
+            kbps >= (if (current >= 1080) KBPS_1080 * 9 / 10 else KBPS_1080) -> 1080
+            kbps >= (if (current >= 720) KBPS_720 * 9 / 10 else KBPS_720 * 12 / 10) -> 720
             else -> 480
         }
         return minOf(h, maxHeight)
     }
 
+    private var lastApplied = 0.0
+
     private fun apply(kbps: Int) {
         targetKbps = kbps
-        transcoder.setBitrate(kbps)
+        lastApplied = correction
+        transcoder.setBitrate((kbps * correction).toInt().coerceAtLeast(200))
         transcoder.setHalfRate(kbps < LOW_KBPS)
     }
 
     private companion object {
         const val AUDIO_OVERHEAD_KBPS = 200
         const val LOW_KBPS = 700
-        const val KBPS_720 = 900
-        const val KBPS_1080 = 2500
+        const val KBPS_720 = 650
+        const val KBPS_1080 = 3500
     }
 }

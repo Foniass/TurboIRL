@@ -107,7 +107,8 @@ class MainActivity : Activity() {
     }
 
     private fun startRelay() {
-        val host = srtHost.text.toString().trim()
+        val host = srtHost.text.toString().trim().split(Regex("""\s+""")).first()
+        if (host != srtHost.text.toString()) srtHost.setText(host)
         val port = srtPort.text.toString().toIntOrNull()
         val latency = srtLatency.text.toString().toIntOrNull()
         if (host.isEmpty() || port == null || port !in 1..65535 || latency == null || latency !in 120..15000) {

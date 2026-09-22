@@ -72,6 +72,7 @@ class VideoTranscoder(
     private var encoderPps: ByteArray? = null
 
     @Volatile private var targetKbps = initialKbps
+    private var cbrLogged = false
 
     init {
         stats.bitrateKbps = initialKbps
@@ -211,8 +212,11 @@ class VideoTranscoder(
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_SECONDS)
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             val caps = enc.codecInfo.getCapabilitiesForType(MIME).encoderCapabilities
-            if (caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)) {
-                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            val cbr = caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            if (cbr) setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+            if (!cbrLogged) {
+                cbrLogged = true
+                logger.log("Encodeur ${enc.name} : mode CBR ${if (cbr) "supporté" else "NON supporté (débit variable)"}")
             }
         }
         enc.setCallback(encoderCallback, handler)

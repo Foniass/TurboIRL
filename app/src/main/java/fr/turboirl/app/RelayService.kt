@@ -88,17 +88,19 @@ class RelayService : Service() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TurboIRL:relay").apply { acquire() }
 
-        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger)
+        // With a transcoder the bitrate controller reacts first; audio priority is only the last resort.
+        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger, if (config.transcode) 0.6 else 0.4)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         // With the camera brake, a small receive buffer makes the back-pressure reach the camera fast.
         val brake = config.adaptive && !config.transcode
         val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)
         if (config.transcode) {
             val minKbps = 400
-            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 6 / 10).coerceAtLeast(minKbps), config.outMaxHeight)
+            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight)
             flvRelay.processor = tc
+            flvRelay.growingHold = false
             transcoder = tc
-            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, logger).also { it.start() }
+            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
             logger.log("Réencodage activé : sortie ${minKbps}-${config.outMaxKbps} kb/s, jusqu'à ${config.outMaxHeight}p, adaptée en continu")
         }
         try {

@@ -35,10 +35,13 @@ while ($true) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $dump = Join-Path $dumps "dump-$stamp.ts"
     Write-Host "`n[$(Get-Date -Format HH:mm:ss)] Attente du téléphone... (dump : $dump)"
+    # -max_interleave_delta 200000 (0,2 s) : ne pas retenir l'audio en attendant une image (sinon OBS reste muet
+    # pendant les suspensions vidéo puis reçoit tout en rafale)
     & ffmpeg -hide_banner -loglevel warning -stats -stats_period 5 `
+        -fflags +nobuffer -flags low_delay -analyzeduration 2000000 -probesize 1000000 `
         -i $src `
-        -map 0 -c copy -f mpegts "udp://127.0.0.1:${ObsPort}?pkt_size=1316" `
-        -map 0 -c copy -f mpegts $dump
+        -map 0 -c copy -max_interleave_delta 200000 -muxdelay 0 -muxpreload 0 -flush_packets 1 -f mpegts "udp://127.0.0.1:${ObsPort}?pkt_size=1316" `
+        -map 0 -c copy -max_interleave_delta 200000 -f mpegts $dump
     if ((Test-Path $dump) -and (Get-Item $dump).Length -lt 100000) { Remove-Item $dump }  # connexion sans flux
     Write-Host "[$(Get-Date -Format HH:mm:ss)] Téléphone déconnecté, redémarrage dans 1 s"
     Start-Sleep 1

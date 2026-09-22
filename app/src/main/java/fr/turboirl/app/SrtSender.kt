@@ -20,6 +20,8 @@ class SrtSender(
     private val latencyMs: Int,
     private val streamId: String,
     private val logger: Logger,
+    /** Send-buffer occupancy (fraction of the latency) above which video gets withheld. */
+    congestOnFraction: Double = 0.4,
 ) : TsSink {
 
     class Stats {
@@ -41,7 +43,7 @@ class SrtSender(
     val stats = Stats()
 
     // Hysteresis on the SRT send buffer occupancy, relative to the latency budget
-    private val congestOnMs = latencyMs * 2 / 5
+    private val congestOnMs = (latencyMs * congestOnFraction).toInt()
     private val congestOffMs = latencyMs / 5
 
     private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_PACKETS)

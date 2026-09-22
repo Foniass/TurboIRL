@@ -23,6 +23,9 @@ class FlvToTsRelay(
     /** Set before the camera connects; null = the camera's video goes through untouched. */
     @Volatile var processor: VideoProcessor? = null
 
+    /** With a fixed-bitrate camera, repeated collapses lengthen the hold; a transcoder adapts instead. */
+    @Volatile var growingHold = true
+
     // Video input size from the stream metadata, for the processor
     private var width = 0
     private var height = 0
@@ -145,7 +148,11 @@ class FlvToTsRelay(
         } else if (congested()) {
             // Collapsing again right after a resume: the link cannot carry video, hold it off longer.
             val sinceResume = (nowNs - resumedAtNs) / 1_000_000
-            holdMs = if (resumedAtNs != 0L && sinceResume < RELAPSE_WINDOW_MS) minOf(holdMs * 2, MAX_HOLD_MS) else MIN_HOLD_MS
+            holdMs = when {
+                !growingHold -> SHORT_HOLD_MS
+                resumedAtNs != 0L && sinceResume < RELAPSE_WINDOW_MS -> minOf(holdMs * 2, MAX_HOLD_MS)
+                else -> MIN_HOLD_MS
+            }
             videoSuspended = true
             stats.videoSuspended = true
             stats.videoSuspensions++
@@ -332,6 +339,7 @@ class FlvToTsRelay(
         const val PTS_OFFSET = 45_000L // 0.5 s of headroom between PCR and DTS
         const val PCR_ONLY_INTERVAL_NS = 100_000_000L
         const val MIN_HOLD_MS = 5_000L
+        const val SHORT_HOLD_MS = 1_000L
         const val MAX_HOLD_MS = 60_000L
         const val RELAPSE_WINDOW_MS = 15_000L
         val AUD = byteArrayOf(0x09, 0xF0.toByte())
