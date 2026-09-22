@@ -1,4 +1,4 @@
-<#
+﻿<#
   Récepteur SRT de test pour TurboIRL.
   - écoute le SRT du téléphone (mode listener)
   - enregistre le flux brut dans dumps\dump-<date>.ts (pour analyse)
