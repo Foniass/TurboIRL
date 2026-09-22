@@ -188,6 +188,12 @@
                 android:singleLine="true" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/goproRecord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Enregistrer aussi sur la carte SD de la GoPro (chauffe, ~9 Go/h)" />
+
         <TextView
             android:id="@+id/goproStatus"
             android:layout_width="match_parent"

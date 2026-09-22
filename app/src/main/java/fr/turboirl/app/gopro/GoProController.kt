@@ -27,6 +27,8 @@ class GoProController(
         val resolution: Int, // 480, 720 or 1080
         val maxKbps: Int,
         val knownAddress: String?,
+        /** Also save a copy on the SD card while streaming (more heat, ~9 GB/h). */
+        val recordLocally: Boolean = false,
     )
 
     enum class State(val label: String) {
@@ -265,7 +267,7 @@ class GoProController(
         val max = settings.maxKbps.coerceIn(800, 8000).toLong()
         val mode = Proto.Writer()
             .string(1, url)
-            .bool(2, false) // don't also record to the SD card
+            .bool(2, settings.recordLocally)
             .varint(3, window)
             .varint(7, 800) // camera-side floor
             .varint(8, max)
@@ -275,7 +277,7 @@ class GoProController(
             ble.proto(GoProBle.CQ_COMMAND, GoProBle.FEATURE_COMMAND, ACT_SET_LIVESTREAM_MODE, ACT_SET_LIVESTREAM_MODE_RSP, mode)
         )
         if (r.int(1) != RESULT_SUCCESS) throw GoProBle.BleException("configuration du live refusée (${r.int(1)})")
-        logger.log("GoPro : live configuré → $url (${settings.resolution}p, max $max kb/s)")
+        logger.log("GoPro : live configuré → $url (${settings.resolution}p, max $max kb/s${if (settings.recordLocally) ", copie sur carte SD" else ""})")
 
         liveStatus = -1
         r = Proto.decode(

@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private lateinit var goproResolution: EditText
     private lateinit var goproMaxKbps: EditText
     private lateinit var goproStatus: TextView
+    private lateinit var goproRecord: CheckBox
     private lateinit var rtmpUrl: TextView
     private lateinit var status: TextView
     private lateinit var log: TextView
@@ -69,6 +70,7 @@ class MainActivity : Activity() {
         goproResolution = findViewById(R.id.goproResolution)
         goproMaxKbps = findViewById(R.id.goproMaxKbps)
         goproStatus = findViewById(R.id.goproStatus)
+        goproRecord = findViewById(R.id.goproRecord)
         rtmpUrl = findViewById(R.id.rtmpUrl)
         status = findViewById(R.id.status)
         log = findViewById(R.id.log)
@@ -89,6 +91,7 @@ class MainActivity : Activity() {
         goproPassword.setText(config.goproPassword)
         goproResolution.setText(config.goproResolution.toString())
         goproMaxKbps.setText(config.goproMaxKbps.toString())
+        goproRecord.isChecked = config.goproRecord
         goproEnabled.setOnCheckedChangeListener { _, checked -> if (checked) requestBluetoothPermissions() }
 
         toggle.setOnClickListener { if (RelayService.instance != null) RelayService.stop(this) else startRelay() }
@@ -165,6 +168,7 @@ class MainActivity : Activity() {
             goproPassword = goproPassword.text.toString(),
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
+            goproRecord = goproRecord.isChecked,
         ).save(this)
         RelayService.start(this)
     }
@@ -177,6 +181,7 @@ class MainActivity : Activity() {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
+        goproRecord.isEnabled = !running
         adaptive.isEnabled = !running
         transcode.isEnabled = !running
         audioTranscode.isEnabled = !running

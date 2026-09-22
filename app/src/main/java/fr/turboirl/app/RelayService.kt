@@ -139,6 +139,7 @@ class RelayService : Service() {
                     ssid = config.goproSsid, password = config.goproPassword,
                     resolution = config.goproResolution, maxKbps = config.goproMaxKbps,
                     knownAddress = config.goproAddress.ifEmpty { null },
+                    recordLocally = config.goproRecord,
                 ),
                 logger,
                 rtmpUrl = {
