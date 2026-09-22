@@ -1,0 +1,256 @@
+package fr.turboirl.core
+
+import fr.turboirl.core.rtmp.Logger
+import fr.turboirl.core.rtmp.RtmpListener
+import fr.turboirl.core.ts.TsMuxer
+import fr.turboirl.core.ts.TsSink
+
+/**
+ * Repackages the FLV tags of an RTMP publisher (H.264 + AAC) into MPEG-TS, without touching
+ * the encoded data. Survives publisher reconnections: output timestamps follow the wall clock
+ * so they keep increasing across sessions.
+ */
+class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
+
+    class Stats {
+        @Volatile var publishing = false
+        @Volatile var publisher = ""
+        @Volatile var videoInfo = ""
+        @Volatile var videoBytes = 0L
+        @Volatile var audioBytes = 0L
+        @Volatile var videoFrames = 0L
+        @Volatile var keyframes = 0L
+        @Volatile var tsBytes = 0L
+        @Volatile var sessions = 0
+    }
+
+    val stats = Stats()
+
+    private val muxer = TsMuxer(sink)
+    private val startNs = System.nanoTime()
+
+    private var sps: ByteArray? = null
+    private var pps: ByteArray? = null
+    private var nalLengthSize = 4
+    private var aacProfile = -1
+    private var aacFreqIndex = 0
+    private var aacChannels = 0
+
+    private var started = false // true once a keyframe went out in this session
+    private var sessionFirstTs = -1L
+    private var sessionOffsetMs = 0L
+    private var lastOutMs = 0L
+    private var warnedVideoCodec = false
+    private var warnedAudioCodec = false
+
+    private var scratch = ByteArray(256 * 1024)
+
+    override fun onPublishStart(remote: String, app: String, streamKey: String) {
+        sps = null
+        pps = null
+        aacProfile = -1
+        started = false
+        sessionFirstTs = -1
+        stats.publisher = remote
+        stats.videoInfo = ""
+        stats.publishing = true
+        stats.sessions++
+        logger.log("Caméra connectée ($remote) → $app/$streamKey")
+    }
+
+    override fun onMetadata(metadata: Map<String, Any?>) {
+        val w = (metadata["width"] as? Double)?.toInt()
+        val h = (metadata["height"] as? Double)?.toInt()
+        val fps = metadata["framerate"] as? Double
+        val kbps = (metadata["videodatarate"] as? Double)?.toInt()
+        stats.videoInfo = buildString {
+            if (w != null && h != null) append("${w}x$h")
+            if (fps != null && fps > 0) append(" @ ${"%.0f".format(fps)} i/s")
+            if (kbps != null && kbps > 0) append(" ~$kbps kb/s")
+        }.trim()
+        logger.log("Métadonnées caméra : ${stats.videoInfo.ifEmpty { metadata.keys.joinToString() }}")
+    }
+
+    override fun onPublishEnd(reason: String) {
+        muxer.flush()
+        stats.publishing = false
+        logger.log("Caméra déconnectée : $reason")
+    }
+
+    override fun onVideo(timestampMs: Long, data: ByteArray) {
+        stats.videoBytes += data.size
+        val b0 = data[0].toInt() and 0xFF
+        if (b0 and 0x80 != 0 || (b0 and 0x0F) != 7) {
+            if (!warnedVideoCodec) {
+                warnedVideoCodec = true
+                logger.log("Codec vidéo non supporté (seul le H.264 l'est) : 0x${b0.toString(16)}")
+            }
+            return
+        }
+        if (data.size < 5) return
+        val packetType = data[1].toInt()
+        if (packetType == 0) {
+            parseAvcConfig(data)
+            return
+        }
+        if (packetType != 1) return
+        val spsNal = sps ?: return
+        val ppsNal = pps ?: return
+
+        val keyframe = (b0 shr 4) == 1
+        if (!started) {
+            if (!keyframe) return
+            started = true
+        }
+        // signed 24-bit composition time offset
+        val cts = ((data[2].toInt() shl 24) or ((data[3].toInt() and 0xFF) shl 16) or ((data[4].toInt() and 0xFF) shl 8)) shr 8
+
+        // Worst case growth: every NAL gains (4 - nalLengthSize) bytes.
+        val needed = data.size * 2 + spsNal.size + ppsNal.size + 32
+        if (scratch.size < needed) scratch = ByteArray(needed)
+        val out = scratch
+        var o = putNal(out, 0, AUD, AUD.size)
+
+        var hasSps = false
+        forEachNal(data) { off, _ -> if ((data[off].toInt() and 0x1F) == 7) hasSps = true }
+        if (keyframe && !hasSps) {
+            o = putNal(out, o, spsNal, spsNal.size)
+            o = putNal(out, o, ppsNal, ppsNal.size)
+        }
+        forEachNal(data) { off, len ->
+            if ((data[off].toInt() and 0x1F) != 9) { // we already wrote our own AUD
+                o = putStartCode(out, o)
+                System.arraycopy(data, off, out, o, len)
+                o += len
+            }
+        }
+
+        val outMs = outputTime(timestampMs)
+        val dts = outMs * 90 + PTS_OFFSET
+        muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
+        stats.videoFrames++
+        if (keyframe) stats.keyframes++
+        stats.tsBytes = muxer.bytesWritten
+    }
+
+    override fun onAudio(timestampMs: Long, data: ByteArray) {
+        stats.audioBytes += data.size
+        val b0 = data[0].toInt() and 0xFF
+        if ((b0 shr 4) != 10) {
+            if (!warnedAudioCodec) {
+                warnedAudioCodec = true
+                logger.log("Codec audio non supporté (seul l'AAC l'est) : format ${b0 shr 4}")
+            }
+            return
+        }
+        if (data.size < 2) return
+        if (data[1].toInt() == 0) {
+            parseAacConfig(data)
+            return
+        }
+        if (aacProfile < 0 || !started) return
+
+        val rawLen = data.size - 2
+        val frameLen = rawLen + 7
+        if (scratch.size < frameLen) scratch = ByteArray(frameLen)
+        val out = scratch
+        out[0] = 0xFF.toByte()
+        out[1] = 0xF1.toByte() // MPEG-4, no CRC
+        out[2] = ((aacProfile shl 6) or (aacFreqIndex shl 2) or (aacChannels shr 2)).toByte()
+        out[3] = (((aacChannels and 3) shl 6) or (frameLen shr 11)).toByte()
+        out[4] = (frameLen shr 3).toByte()
+        out[5] = (((frameLen and 7) shl 5) or 0x1F).toByte()
+        out[6] = 0xFC.toByte()
+        System.arraycopy(data, 2, out, 7, rawLen)
+
+        muxer.writeAudio(out, frameLen, outputTime(timestampMs) * 90 + PTS_OFFSET)
+        stats.tsBytes = muxer.bytesWritten
+    }
+
+    /** Maps a session-relative RTMP timestamp onto the relay's ever-increasing timeline. */
+    private fun outputTime(timestampMs: Long): Long {
+        if (sessionFirstTs < 0) {
+            sessionFirstTs = timestampMs
+            val wallMs = (System.nanoTime() - startNs) / 1_000_000
+            sessionOffsetMs = maxOf(wallMs, lastOutMs + 100)
+        }
+        val out = maxOf(0, timestampMs - sessionFirstTs) + sessionOffsetMs
+        if (out > lastOutMs) lastOutMs = out
+        return out
+    }
+
+    private fun parseAvcConfig(data: ByteArray) {
+        // FLV header (5) + AVCDecoderConfigurationRecord
+        try {
+            var p = 5
+            nalLengthSize = (data[p + 4].toInt() and 3) + 1
+            val spsCount = data[p + 5].toInt() and 0x1F
+            p += 6
+            for (i in 0 until spsCount) {
+                val len = u16(data, p)
+                if (i == 0) sps = data.copyOfRange(p + 2, p + 2 + len)
+                p += 2 + len
+            }
+            val ppsCount = data[p].toInt() and 0xFF
+            p += 1
+            for (i in 0 until ppsCount) {
+                val len = u16(data, p)
+                if (i == 0) pps = data.copyOfRange(p + 2, p + 2 + len)
+                p += 2 + len
+            }
+            logger.log("Config H.264 reçue (SPS ${sps?.size} o, PPS ${pps?.size} o)")
+        } catch (e: IndexOutOfBoundsException) {
+            logger.log("Config H.264 invalide")
+        }
+    }
+
+    private fun parseAacConfig(data: ByteArray) {
+        if (data.size < 4) return
+        val b0 = data[2].toInt() and 0xFF
+        val b1 = data[3].toInt() and 0xFF
+        val objectType = b0 shr 3
+        aacFreqIndex = ((b0 and 7) shl 1) or (b1 shr 7)
+        aacChannels = (b1 shr 3) and 0xF
+        if (objectType !in 1..4 || aacFreqIndex == 15) {
+            logger.log("Config AAC non supportée (type $objectType)")
+            aacProfile = -1
+            return
+        }
+        aacProfile = objectType - 1
+        muxer.setHasAudio(true)
+        logger.log("Config AAC reçue (${AAC_RATES.getOrElse(aacFreqIndex) { 0 }} Hz, $aacChannels canaux)")
+    }
+
+    private inline fun forEachNal(data: ByteArray, block: (off: Int, len: Int) -> Unit) {
+        var p = 5
+        while (p + nalLengthSize <= data.size) {
+            var len = 0
+            repeat(nalLengthSize) { len = (len shl 8) or (data[p++].toInt() and 0xFF) }
+            if (len <= 0 || len > data.size - p) break
+            block(p, len)
+            p += len
+        }
+    }
+
+    private fun putStartCode(out: ByteArray, off: Int): Int {
+        out[off] = 0
+        out[off + 1] = 0
+        out[off + 2] = 0
+        out[off + 3] = 1
+        return off + 4
+    }
+
+    private fun putNal(out: ByteArray, off: Int, nal: ByteArray, len: Int): Int {
+        val o = putStartCode(out, off)
+        System.arraycopy(nal, 0, out, o, len)
+        return o + len
+    }
+
+    private fun u16(b: ByteArray, off: Int): Int = ((b[off].toInt() and 0xFF) shl 8) or (b[off + 1].toInt() and 0xFF)
+
+    private companion object {
+        const val PTS_OFFSET = 45_000L // 0.5 s of headroom between PCR and DTS
+        val AUD = byteArrayOf(0x09, 0xF0.toByte())
+        val AAC_RATES = intArrayOf(96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
+    }
+}
