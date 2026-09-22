@@ -73,6 +73,12 @@
                 android:singleLine="true" />
         </LinearLayout>
 
+        <CheckBox
+            android:id="@+id/adaptive"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Débit modulable : freiner la caméra quand la 5G sature (expérimental)" />
+
         <Button
             android:id="@+id/toggle"
             android:layout_width="match_parent"

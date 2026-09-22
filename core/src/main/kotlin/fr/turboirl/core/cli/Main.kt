@@ -15,12 +15,14 @@ import java.net.InetSocketAddress
  *   --file out.ts          write the MPEG-TS to a file
  *   --udp 127.0.0.1:9000   send the MPEG-TS over UDP
  *   --congest 10:3         pretend the uplink saturates for 3 s every 10 s (tests audio priority)
+ *   --limit 150            cap the RTMP read rate at 150 kB/s (tests camera back-pressure)
  */
 fun main(args: Array<String>) {
     var port = 1935
     var file: String? = null
     var udp: String? = null
     var congest: String? = null
+    var limitKBps = 0L
     var i = 0
     while (i < args.size) {
         when (args[i]) {
@@ -28,6 +30,7 @@ fun main(args: Array<String>) {
             "--file" -> file = args[++i]
             "--udp" -> udp = args[++i]
             "--congest" -> congest = args[++i]
+            "--limit" -> limitKBps = args[++i].toLong()
             else -> error("argument inconnu : ${args[i]}")
         }
         i++
@@ -53,7 +56,9 @@ fun main(args: Array<String>) {
         { (System.currentTimeMillis() - t0) % period < duration }
     } ?: { false }
     val relay = FlvToTsRelay({ buf, off, len -> sinks.forEach { it.write(buf, off, len) } }, logger, congested)
-    RtmpServer(port, relay, logger).start()
+    val server = RtmpServer(port, relay, logger, if (limitKBps > 0) 64 * 1024 else 0)
+    server.limiter.bytesPerSec = limitKBps * 1000
+    server.start()
 
     var lastTs = 0L
     while (true) {

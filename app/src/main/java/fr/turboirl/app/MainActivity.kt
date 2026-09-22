@@ -31,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var toggle: Button
     private lateinit var battery: Button
     private lateinit var share: Button
+    private lateinit var adaptive: CheckBox
     private lateinit var goproEnabled: CheckBox
     private lateinit var goproSsid: EditText
     private lateinit var goproPassword: EditText
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
         toggle = findViewById(R.id.toggle)
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
+        adaptive = findViewById(R.id.adaptive)
         goproEnabled = findViewById(R.id.goproEnabled)
         goproSsid = findViewById(R.id.goproSsid)
         goproPassword = findViewById(R.id.goproPassword)
@@ -66,6 +68,7 @@ class MainActivity : Activity() {
         srtPort.setText(config.srtPort.toString())
         srtLatency.setText(config.srtLatencyMs.toString())
         srtStreamId.setText(config.srtStreamId)
+        adaptive.isChecked = config.adaptive
         goproEnabled.isChecked = config.goproEnabled
         goproSsid.setText(config.goproSsid)
         goproPassword.setText(config.goproPassword)
@@ -123,6 +126,7 @@ class MainActivity : Activity() {
         Config.load(this).copy(
             srtHost = host, srtPort = port, srtLatencyMs = latency,
             srtStreamId = srtStreamId.text.toString().trim(),
+            adaptive = adaptive.isChecked,
             goproEnabled = goproOn,
             goproSsid = goproSsid.text.toString().trim(),
             goproPassword = goproPassword.text.toString(),
@@ -140,6 +144,7 @@ class MainActivity : Activity() {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
+        adaptive.isEnabled = !running
         val gp = service?.snapshot?.gopro
         goproStatus.text = when {
             gp != null -> "GoPro ${gp.cameraName} : ${gp.state.label}" +
@@ -184,7 +189,9 @@ class MainActivity : Activity() {
         } else {
             "SRT    ✗ PC injoignable, nouvel essai en cours"
         }
-        return "$camera\n$srt\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}"
+        val brake = if (s.cameraLimitKbps > 0) "\n       frein caméra ${s.cameraLimitKbps} kb/s" else ""
+        val pauses = if (s.videoSuspensions > 0) " · vidéo en pause ${s.videoSuspensions}× (${s.videoSuspendedMs / 1000} s)" else ""
+        return "$camera\n$srt$brake\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
     }
 
     private fun shareLog() {

@@ -33,6 +33,7 @@ class RelayService : Service() {
         val videoSuspensions: Int,
         val videoSuspendedMs: Long,
         val gopro: GoProController?,
+        val cameraLimitKbps: Int,
         val srt: SrtSender.Stats,
     )
 
@@ -43,6 +44,7 @@ class RelayService : Service() {
     private var relay: FlvToTsRelay? = null
     private var srtSender: SrtSender? = null
     private var gopro: GoProController? = null
+    private var governor: BitrateGovernor? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var lastInBytes = 0L
@@ -80,7 +82,8 @@ class RelayService : Service() {
 
         val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
-        val server = RtmpServer(config.rtmpPort, flvRelay, logger)
+        // With the camera brake, a small receive buffer makes the back-pressure reach the camera fast.
+        val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (config.adaptive) 64 * 1024 else 0)
         try {
             server.start()
         } catch (e: Exception) {
@@ -94,6 +97,10 @@ class RelayService : Service() {
         rtmpServer = server
         lastError = null
         logger.log("Relais démarré → srt://${config.srtHost}:${config.srtPort}")
+        if (config.adaptive) {
+            governor = BitrateGovernor(sender, server.limiter, config.srtLatencyMs, config.goproMaxKbps, logger).also { it.start() }
+            logger.log("Débit modulable activé : frein caméra entre 900 et ${config.goproMaxKbps} kb/s")
+        }
 
         if (config.goproEnabled) {
             val controller = GoProController(
@@ -128,12 +135,15 @@ class RelayService : Service() {
         val server = rtmpServer
         val sender = srtSender
         val controller = gopro
+        val gov = governor
+        governor = null
         rtmpServer = null
         srtSender = null
         relay = null
         gopro = null
         // Socket teardown can block for a few seconds: keep it off the main thread.
         Thread {
+            gov?.stop()
             controller?.stop()
             server?.stop()
             sender?.stop()
@@ -165,6 +175,7 @@ class RelayService : Service() {
             videoSuspensions = stats.videoSuspensions,
             videoSuspendedMs = stats.videoSuspendedMs,
             gopro = gopro,
+            cameraLimitKbps = governor?.limitKbps ?: 0,
             srt = sender.stats,
         )
         lastInBytes = inBytes
@@ -181,6 +192,7 @@ class RelayService : Service() {
                             "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
                             "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
                             "saturations +${st.queueOverflows - lastOverflows}" +
+                            (if (snap.cameraLimitKbps > 0) ", frein caméra ${snap.cameraLimitKbps} kb/s" else "") +
                             (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
                     } else "SRT déconnecté"
             )

@@ -8,6 +8,7 @@ data class Config(
     val srtLatencyMs: Int,
     val srtStreamId: String,
     val rtmpPort: Int,
+    val adaptive: Boolean,
     val goproEnabled: Boolean,
     val goproSsid: String,
     val goproPassword: String,
@@ -23,6 +24,7 @@ data class Config(
             .putInt("srtLatencyMs", srtLatencyMs)
             .putString("srtStreamId", srtStreamId)
             .putInt("rtmpPort", rtmpPort)
+            .putBoolean("adaptive", adaptive)
             .putBoolean("goproEnabled", goproEnabled)
             .putString("goproSsid", goproSsid)
             .putString("goproPassword", goproPassword)
@@ -44,6 +46,7 @@ data class Config(
                 srtLatencyMs = p.getInt("srtLatencyMs", 2000),
                 srtStreamId = p.getString("srtStreamId", "").orEmpty(),
                 rtmpPort = p.getInt("rtmpPort", 1935),
+                adaptive = p.getBoolean("adaptive", false),
                 goproEnabled = p.getBoolean("goproEnabled", false),
                 goproSsid = p.getString("goproSsid", "").orEmpty(),
                 goproPassword = p.getString("goproPassword", "").orEmpty(),
