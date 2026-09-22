@@ -126,8 +126,7 @@ class MainActivity : Activity() {
         }
         val srt = if (s.srt.connected) {
             "SRT    ✓ connecté   envoyé ${s.outKbps} kb/s\n" +
-                "       RTT ${"%.0f".format(s.srt.rttMs)} ms · tampon ${s.srt.sendBufferMs} ms · " +
-                "lien ~${"%.1f".format(s.srt.bandwidthMbps)} Mb/s\n" +
+                "       RTT ${"%.0f".format(s.srt.rttMs)} ms · tampon ${s.srt.sendBufferMs} ms\n" +
                 "       retransmis ${s.srt.retransmitted} · perdus ${s.srt.dropped} · saturations ${s.srt.queueOverflows}"
         } else {
             "SRT    ✗ PC injoignable, nouvel essai en cours"

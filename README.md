@@ -102,7 +102,8 @@ gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "...
 
 ## Limites connues (MVP)
 
-- Pas de débit adaptatif : si l'upload passe sous le débit de la GoPro, l'image saccade
-  (compteurs « perdus » / « saturations » dans l'appli).
+- Pas de débit adaptatif : si l'upload passe sous le débit de la GoPro, l'appli suspend la
+  vidéo (jusqu'à la prochaine image clé après retour à la normale) mais garde le son. Compteurs
+  « vidéo en pause » et « perdus » dans l'écran État.
 - H.264 + AAC uniquement. Une seule caméra à la fois.
 - La GoPro se configure à la main ; le pilotage Bluetooth (Open GoPro) est l'étape suivante.

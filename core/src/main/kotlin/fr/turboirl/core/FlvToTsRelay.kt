@@ -9,8 +9,16 @@ import fr.turboirl.core.ts.TsSink
  * Repackages the FLV tags of an RTMP publisher (H.264 + AAC) into MPEG-TS, without touching
  * the encoded data. Survives publisher reconnections: output timestamps follow the wall clock
  * so they keep increasing across sessions.
+ *
+ * [congested] is polled on every frame; while it returns true, video is withheld (from the
+ * next frame on) and only audio + clock go out, so that a saturated uplink never silences the
+ * stream. Video resumes on the first keyframe after the link has recovered.
  */
-class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
+class FlvToTsRelay(
+    sink: TsSink,
+    private val logger: Logger,
+    private val congested: () -> Boolean = { false },
+) : RtmpListener {
 
     class Stats {
         @Volatile var publishing = false
@@ -22,6 +30,9 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
         @Volatile var keyframes = 0L
         @Volatile var tsBytes = 0L
         @Volatile var sessions = 0
+        @Volatile var videoSuspended = false
+        @Volatile var videoSuspensions = 0
+        @Volatile var videoSuspendedMs = 0L
     }
 
     val stats = Stats()
@@ -37,6 +48,9 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
     private var aacChannels = 0
 
     private var started = false // true once a keyframe went out in this session
+    private var videoSuspended = false
+    private var suspendedAtNs = 0L
+    private var lastPcrOnlyNs = 0L
     private var sessionFirstTs = -1L
     private var sessionOffsetMs = 0L
     private var lastOutMs = 0L
@@ -51,6 +65,8 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
         aacProfile = -1
         started = false
         sessionFirstTs = -1
+        videoSuspended = false
+        stats.videoSuspended = false
         stats.publisher = remote
         stats.videoInfo = ""
         stats.publishing = true
@@ -101,6 +117,21 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
         if (!started) {
             if (!keyframe) return
             started = true
+        }
+        if (videoSuspended) {
+            if (congested() || !keyframe) return
+            videoSuspended = false
+            stats.videoSuspended = false
+            val ms = (System.nanoTime() - suspendedAtNs) / 1_000_000
+            stats.videoSuspendedMs += ms
+            logger.log("Vidéo reprise après ${"%.1f".format(ms / 1000.0)} s")
+        } else if (congested()) {
+            videoSuspended = true
+            stats.videoSuspended = true
+            stats.videoSuspensions++
+            suspendedAtNs = System.nanoTime()
+            logger.log("Liaison saturée : vidéo suspendue, le son continue")
+            return
         }
         // signed 24-bit composition time offset
         val cts = ((data[2].toInt() shl 24) or ((data[3].toInt() and 0xFF) shl 16) or ((data[4].toInt() and 0xFF) shl 8)) shr 8
@@ -163,7 +194,15 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
         out[6] = 0xFC.toByte()
         System.arraycopy(data, 2, out, 7, rawLen)
 
-        muxer.writeAudio(out, frameLen, outputTime(timestampMs) * 90 + PTS_OFFSET)
+        val outMs = outputTime(timestampMs)
+        if (videoSuspended) {
+            val now = System.nanoTime()
+            if (now - lastPcrOnlyNs > PCR_ONLY_INTERVAL_NS) {
+                lastPcrOnlyNs = now
+                muxer.writePcrOnly(outMs * 90)
+            }
+        }
+        muxer.writeAudio(out, frameLen, outMs * 90 + PTS_OFFSET)
         stats.tsBytes = muxer.bytesWritten
     }
 
@@ -250,6 +289,7 @@ class FlvToTsRelay(sink: TsSink, private val logger: Logger) : RtmpListener {
 
     private companion object {
         const val PTS_OFFSET = 45_000L // 0.5 s of headroom between PCR and DTS
+        const val PCR_ONLY_INTERVAL_NS = 100_000_000L
         val AUD = byteArrayOf(0x09, 0xF0.toByte())
         val AAC_RATES = intArrayOf(96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350)
     }

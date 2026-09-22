@@ -24,6 +24,8 @@ class SrtSender(
 
     class Stats {
         @Volatile var connected = false
+        /** Send buffer is filling up: the uplink cannot keep up with the input. */
+        @Volatile var congested = false
         @Volatile var rttMs = 0.0
         @Volatile var sendRateMbps = 0.0
         @Volatile var bandwidthMbps = 0.0
@@ -37,6 +39,10 @@ class SrtSender(
     }
 
     val stats = Stats()
+
+    // Hysteresis on the SRT send buffer occupancy, relative to the latency budget
+    private val congestOnMs = latencyMs * 2 / 5
+    private val congestOffMs = latencyMs / 5
 
     private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_PACKETS)
     @Volatile private var running = false
@@ -89,6 +95,7 @@ class SrtSender(
                 firstFailure = false
             } finally {
                 stats.connected = false
+                stats.congested = false
                 try {
                     socket?.close()
                 } catch (_: Exception) {
@@ -105,14 +112,14 @@ class SrtSender(
     private fun pump(socket: SrtSocket) {
         var lastStatsNs = System.nanoTime()
         while (running) {
-            val packet = queue.poll(500, TimeUnit.MILLISECONDS)
+            val packet = queue.poll(100, TimeUnit.MILLISECONDS)
             if (packet != null) {
                 socket.send(packet)
             } else if (!socket.isConnected) {
                 throw java.net.SocketException("connexion perdue")
             }
             val now = System.nanoTime()
-            if (now - lastStatsNs >= 1_000_000_000L) {
+            if (now - lastStatsNs >= STATS_PERIOD_NS) {
                 lastStatsNs = now
                 val s = socket.bistats(clear = true, instantaneous = true)
                 stats.rttMs = s.msRTT
@@ -123,6 +130,8 @@ class SrtSender(
                 stats.sendBufferPackets = s.pktSndBuf
                 stats.retransmitted += s.pktRetrans
                 stats.dropped += s.pktSndDrop
+                if (s.msSndBuf >= congestOnMs) stats.congested = true
+                else if (s.msSndBuf <= congestOffMs) stats.congested = false
             }
         }
     }
@@ -130,5 +139,6 @@ class SrtSender(
     private companion object {
         const val QUEUE_PACKETS = 3000 // ~4 MB, several seconds of video
         const val RETRY_MS = 2000L
+        const val STATS_PERIOD_NS = 250_000_000L
     }
 }

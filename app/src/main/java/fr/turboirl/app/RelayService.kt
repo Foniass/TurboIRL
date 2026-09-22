@@ -28,6 +28,9 @@ class RelayService : Service() {
         val inKbps: Long,
         val outKbps: Long,
         val cameraSessions: Int,
+        val videoSuspended: Boolean,
+        val videoSuspensions: Int,
+        val videoSuspendedMs: Long,
         val srt: SrtSender.Stats,
     )
 
@@ -73,7 +76,7 @@ class RelayService : Service() {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TurboIRL:relay").apply { acquire() }
 
         val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger)
-        val flvRelay = FlvToTsRelay(sender, logger)
+        val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         val server = RtmpServer(config.rtmpPort, flvRelay, logger)
         try {
             server.start()
@@ -129,6 +132,9 @@ class RelayService : Service() {
             inKbps = ((inBytes - lastInBytes) * 8 / 1000 / seconds).toLong(),
             outKbps = ((outBytes - lastOutBytes) * 8 / 1000 / seconds).toLong(),
             cameraSessions = stats.sessions,
+            videoSuspended = stats.videoSuspended,
+            videoSuspensions = stats.videoSuspensions,
+            videoSuspendedMs = stats.videoSuspendedMs,
             srt = sender.stats,
         )
         lastInBytes = inBytes
@@ -144,7 +150,8 @@ class RelayService : Service() {
                         "SRT sortie ${"%.0f".format(st.sendRateMbps * 1000)} kb/s, RTT ${"%.0f".format(st.rttMs)} ms, " +
                             "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
                             "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
-                            "saturations +${st.queueOverflows - lastOverflows}, lien ~${"%.1f".format(st.bandwidthMbps)} Mb/s"
+                            "saturations +${st.queueOverflows - lastOverflows}" +
+                            (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
                     } else "SRT déconnecté"
             )
             lastRetrans = st.retransmitted
@@ -152,7 +159,7 @@ class RelayService : Service() {
             lastOverflows = st.queueOverflows
         }
 
-        val camera = if (snap.cameraConnected) "GoPro ✓ ${snap.inKbps} kb/s" else "GoPro ✗"
+        val camera = if (snap.cameraConnected) "GoPro ✓ ${snap.inKbps} kb/s" + (if (snap.videoSuspended) " (son seul)" else "") else "GoPro ✗"
         val srt = if (snap.srt.connected) "SRT ✓ ${"%.0f".format(snap.srt.rttMs)} ms" else "SRT ✗"
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification("$camera · $srt"))
         handler.postDelayed(::tick, 1000)

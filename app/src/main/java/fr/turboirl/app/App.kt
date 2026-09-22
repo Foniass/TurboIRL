@@ -45,7 +45,7 @@ class App : Application() {
                 AppLog.log(
                     "Fin du process précédent le ${format.format(Date(info.timestamp))} : ${reasonName(info.reason)}" +
                         (info.description?.let { " — $it" } ?: "") +
-                        " (statut ${info.status}, importance ${info.importance}, RSS ${info.rss * 4 / 1024} Mo)"
+                        " (statut ${info.status}, importance ${info.importance}, RSS ${info.rss / 1024} Mo)"
                 )
             }
         } catch (e: Exception) {

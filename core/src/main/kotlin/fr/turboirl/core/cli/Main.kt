@@ -14,17 +14,20 @@ import java.net.InetSocketAddress
  *   --port 1935            RTMP listen port
  *   --file out.ts          write the MPEG-TS to a file
  *   --udp 127.0.0.1:9000   send the MPEG-TS over UDP
+ *   --congest 10:3         pretend the uplink saturates for 3 s every 10 s (tests audio priority)
  */
 fun main(args: Array<String>) {
     var port = 1935
     var file: String? = null
     var udp: String? = null
+    var congest: String? = null
     var i = 0
     while (i < args.size) {
         when (args[i]) {
             "--port" -> port = args[++i].toInt()
             "--file" -> file = args[++i]
             "--udp" -> udp = args[++i]
+            "--congest" -> congest = args[++i]
             else -> error("argument inconnu : ${args[i]}")
         }
         i++
@@ -43,7 +46,13 @@ fun main(args: Array<String>) {
     require(sinks.isNotEmpty()) { "préciser --file et/ou --udp" }
 
     val logger = Logger { println(it) }
-    val relay = FlvToTsRelay({ buf, off, len -> sinks.forEach { it.write(buf, off, len) } }, logger)
+    val congested: () -> Boolean = congest?.let { spec ->
+        val period = spec.substringBefore(':').toLong() * 1000
+        val duration = spec.substringAfter(':').toLong() * 1000
+        val t0 = System.currentTimeMillis();
+        { (System.currentTimeMillis() - t0) % period < duration }
+    } ?: { false }
+    val relay = FlvToTsRelay({ buf, off, len -> sinks.forEach { it.write(buf, off, len) } }, logger, congested)
     RtmpServer(port, relay, logger).start()
 
     var lastTs = 0L

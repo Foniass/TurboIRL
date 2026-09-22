@@ -54,6 +54,34 @@ class TsMuxer(private val sink: TsSink) {
         if (batchLen > 0 && System.nanoTime() - batchStartedNs > AUDIO_FLUSH_NS) flush()
     }
 
+    /**
+     * Keeps the clock alive while video is being withheld: a payload-less packet on the PCR PID,
+     * plus PAT/PMT now and then so that a receiver joining mid-way can still lock on.
+     */
+    fun writePcrOnly(pcr: Long) {
+        if (lastPsiNs == 0L) return
+        val now = System.nanoTime()
+        if (now - lastPsiNs > PSI_INTERVAL_NS) {
+            writePsi()
+            lastPsiNs = now
+        }
+        val off = nextPacket()
+        batch[off] = 0x47
+        batch[off + 1] = (VIDEO_PID shr 8).toByte()
+        batch[off + 2] = VIDEO_PID.toByte()
+        batch[off + 3] = (0x20 or videoCc).toByte() // adaptation field only: CC is not incremented
+        batch[off + 4] = 183.toByte()
+        batch[off + 5] = 0x10
+        val base = pcr and TS_MASK
+        batch[off + 6] = (base shr 25).toByte()
+        batch[off + 7] = (base shr 17).toByte()
+        batch[off + 8] = (base shr 9).toByte()
+        batch[off + 9] = (base shr 1).toByte()
+        batch[off + 10] = (((base and 1L) shl 7) or 0x7E).toByte()
+        batch[off + 11] = 0
+        for (p in off + 12 until off + TS_PACKET) batch[p] = 0xFF.toByte()
+    }
+
     fun flush() {
         if (batchLen > 0) {
             sink.write(batch, 0, batchLen)
