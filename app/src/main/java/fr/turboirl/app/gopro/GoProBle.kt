@@ -243,6 +243,25 @@ class GoProBle(private val context: Context, private val logger: Logger) {
         return resp.copyOfRange(1, resp.size)
     }
 
+    /** Reads the current value of settings (TLV query 0x12); returns id → value for one-byte values. */
+    fun getSettings(ids: List<Int>, timeoutMs: Long = 5000): Map<Int, Int> {
+        val resp = request(CQ_QUERY, byteArrayOf(QUERY_GET_SETTING_VALUE.toByte()) + ids.map { it.toByte() }.toByteArray(), timeoutMs) { uuid, msg ->
+            uuid == CQ_QUERY_RESP && msg.isNotEmpty() && (msg[0].toInt() and 0xFF) == QUERY_GET_SETTING_VALUE
+        }
+        val out = LinkedHashMap<Int, Int>()
+        var i = 2 // [query id][status] then (id, len, value…)*
+        while (i + 2 <= resp.size) {
+            val id = resp[i].toInt() and 0xFF
+            val len = resp[i + 1].toInt() and 0xFF
+            if (i + 2 + len > resp.size) break
+            var v = 0
+            for (k in 0 until len) v = (v shl 8) or (resp[i + 2 + k].toInt() and 0xFF)
+            out[id] = v
+            i += 2 + len
+        }
+        return out
+    }
+
     /** Writes a one-byte setting; returns the status byte (0 = ok). */
     fun setSetting(settingId: Int, value: Int, timeoutMs: Long = 5000): Int {
         val resp = request(CQ_SETTINGS, byteArrayOf(settingId.toByte(), 1, value.toByte()), timeoutMs) { uuid, msg ->
@@ -393,6 +412,7 @@ class GoProBle(private val context: Context, private val logger: Logger) {
         val CQ_COMMAND_RESP: UUID = gp("0073")
         val CQ_SETTINGS: UUID = gp("0074")
         val CQ_SETTINGS_RESP: UUID = gp("0075")
+        const val QUERY_GET_SETTING_VALUE = 0x12
         val CQ_QUERY: UUID = gp("0076")
         val CQ_QUERY_RESP: UUID = gp("0077")
         val CM_NET_MGMT_COMM: UUID = gp("0091")

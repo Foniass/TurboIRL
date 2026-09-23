@@ -302,13 +302,25 @@ class GoProController(
                 logger.log("GoPro : réglage $label accepté")
             } else {
                 logger.log("GoPro : réglage $label ($id=$value) refusé (code $status)")
-                if (id == SETTING_ASPECT_RATIO) {
-                    // Newer firmwares expose 9:16 as a resolution instead (1080 9:16 = 110)
-                    val alt = try { ble.setSetting(SETTING_RESOLUTION, 110) } catch (e: GoProBle.BleException) { -1 }
-                    logger.log("GoPro : résolution 1080 9:16 (2=110) ${if (alt == 0) "acceptée" else "refusée (code $alt)"}")
-                    if (alt == 0) break
+                if (id == SETTING_RESOLUTION) {
+                    // 24/09 : 9:16 accepted but 1080 (=9) refused → in 9:16 the resolutions have their own ids
+                    for ((alt, altLabel) in listOf(110 to "1080 9:16", 109 to "4K 9:16")) {
+                        val s = try { ble.setSetting(SETTING_RESOLUTION, alt) } catch (e: GoProBle.BleException) { -1 }
+                        logger.log("GoPro : résolution $altLabel (2=$alt) ${if (s == 0) "acceptée" else "refusée (code $s)"}")
+                        if (s == 0) break
+                    }
                 }
             }
+        }
+        try {
+            val v = ble.getSettings(listOf(SETTING_RESOLUTION, SETTING_FPS, SETTING_ASPECT_RATIO))
+            logger.log(
+                "GoPro : réglages vidéo lus — format ${ASPECT_LABELS[v[SETTING_ASPECT_RATIO]] ?: v[SETTING_ASPECT_RATIO]}, " +
+                    "résolution ${RESOLUTION_LABELS[v[SETTING_RESOLUTION]] ?: v[SETTING_RESOLUTION]}, " +
+                    "cadence ${FPS_LABELS[v[SETTING_FPS]] ?: v[SETTING_FPS]}"
+            )
+        } catch (e: GoProBle.BleException) {
+            logger.log("GoPro : lecture des réglages impossible (${e.message})")
         }
     }
 
@@ -529,6 +541,12 @@ class GoProController(
         const val SETTING_RESOLUTION = 2  // 9 = 1080, 1 = 4K, 110 = 1080 9:16 (newer firmwares)
         const val SETTING_FPS = 3         // 5 = 60, 8 = 30
         const val SETTING_ASPECT_RATIO = 108 // 1 = 16:9, 3 = 8:7, 4 = 9:16
+        private val ASPECT_LABELS = mapOf(0 to "4:3", 1 to "16:9", 3 to "8:7", 4 to "9:16", 5 to "21:9", 6 to "1:1")
+        private val RESOLUTION_LABELS = mapOf(
+            1 to "4K", 4 to "2.7K", 6 to "2.7K 4:3", 7 to "1440", 9 to "1080", 12 to "720", 18 to "4K 4:3", 26 to "5.3K 8:7",
+            27 to "5.3K 4:3", 28 to "4K 8:7", 100 to "5.3K", 107 to "5.3K 8:7", 108 to "4K 8:7", 109 to "4K 9:16", 110 to "1080 9:16",
+        )
+        private val FPS_LABELS = mapOf(0 to "240", 1 to "120", 2 to "100", 3 to "90", 5 to "60", 6 to "50", 8 to "30", 9 to "25", 10 to "24")
 
         const val ACT_SET_PAIRING_STATE = 0x01
         const val ACT_SET_PAIRING_STATE_RSP = 0x81
