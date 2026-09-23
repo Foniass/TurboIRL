@@ -10,12 +10,15 @@ fun interface TsSink {
     fun write(buf: ByteArray, off: Int, len: Int, audioOnly: Boolean)
 }
 
-/** Single program MPEG-TS muxer: one H.264 video stream, optionally one AAC (ADTS) audio stream. */
+/**
+ * Single program MPEG-TS muxer: one video stream (H.264 or H.265), optionally one AAC (ADTS)
+ * audio stream. Not thread-safe by itself: writes come from the RTMP thread and from the codec
+ * threads (transcoders), serialised by the caller's synchronized(muxer).
+ */
 class TsMuxer(private val sink: TsSink) {
 
     private val batch = ByteArray(MAX_BATCH)
     private var batchLen = 0
-    private var batchStartedNs = 0L
     private var batchHasVideo = false
 
     private var hasAudio = false
@@ -106,7 +109,6 @@ class TsMuxer(private val sink: TsSink) {
 
     private fun nextPacket(): Int {
         if (batchLen == MAX_BATCH) flush()
-        if (batchLen == 0) batchStartedNs = System.nanoTime()
         val off = batchLen
         batchLen += TS_PACKET
         return off
@@ -268,7 +270,6 @@ class TsMuxer(private val sink: TsSink) {
         private const val AUDIO_PID = 0x101
         private const val TS_MASK = 0x1FFFFFFFFL
         private const val PSI_INTERVAL_NS = 400_000_000L
-        private const val AUDIO_FLUSH_NS = 50_000_000L
 
         private val CRC_TABLE = IntArray(256) { i ->
             var c = i shl 24

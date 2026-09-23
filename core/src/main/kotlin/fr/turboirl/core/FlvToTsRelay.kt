@@ -6,9 +6,11 @@ import fr.turboirl.core.ts.TsMuxer
 import fr.turboirl.core.ts.TsSink
 
 /**
- * Repackages the FLV tags of an RTMP publisher (H.264 + AAC) into MPEG-TS, without touching
- * the encoded data. Survives publisher reconnections: output timestamps follow the wall clock
- * so they keep increasing across sessions.
+ * Repackages the FLV tags of an RTMP publisher (H.264 + AAC) into MPEG-TS. What gets muxed is
+ * either the output of the [processor] / [audioProcessor] (the transcoders, normal case in the
+ * app) or the camera's data untouched (fallback when a transcoder gave up, and the CLI).
+ * Survives publisher reconnections: output timestamps follow the wall clock so they keep
+ * increasing across sessions.
  *
  * [congested] is polled on every frame; while it returns true, video is withheld (from the
  * next frame on) and only audio + clock go out, so that a saturated uplink never silences the
@@ -20,11 +22,12 @@ class FlvToTsRelay(
     private val congested: () -> Boolean = { false },
 ) : RtmpListener, EncodedVideoSink, EncodedAudioSink {
 
-    /** Set before the camera connects; null = the camera's video goes through untouched. */
+    /** Set before the camera connects; null (CLI) or inactive = the camera's video goes through untouched. */
     @Volatile var processor: VideoProcessor? = null
+    /** Same for the sound: null or inactive = the camera's AAC goes through untouched. */
     @Volatile var audioProcessor: AudioProcessor? = null
 
-    /** With a fixed-bitrate camera, repeated collapses lengthen the hold; a transcoder adapts instead. */
+    /** With a fixed-bitrate camera (passthrough), repeated collapses lengthen the hold; a transcoder adapts instead. */
     @Volatile var growingHold = true
 
     /**
@@ -165,6 +168,8 @@ class FlvToTsRelay(
                     val outMs = outputTime(timestampMs)
                     val dts = outMs * 90 + PTS_OFFSET
                     synchronized(muxer) {
+                        // Camera video is H.264: after a transcoder give-up the PMT must say so again (no-op if unchanged)
+                        muxer.videoStreamType = TsMuxer.STREAM_TYPE_H264
                         muxer.writeVideo(scratch, o, dts + cts * 90L, dts, outMs * 90, true)
                         stats.tsBytes = muxer.bytesWritten
                     }
@@ -204,6 +209,8 @@ class FlvToTsRelay(
         }
         val dts = outMs * 90 + PTS_OFFSET
         synchronized(muxer) {
+            // Camera video is H.264: after a transcoder give-up the PMT must say so again (no-op if unchanged)
+            muxer.videoStreamType = TsMuxer.STREAM_TYPE_H264
             muxer.writeVideo(out, o, dts + cts * 90L, dts, outMs * 90, keyframe)
             stats.tsBytes = muxer.bytesWritten
         }

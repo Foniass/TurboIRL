@@ -1,7 +1,8 @@
 # TurboIRL
 
 Relais de streaming IRL pour Android : la GoPro envoie son flux RTMP au téléphone (via le
-partage de connexion), l'appli le réemballe en MPEG-TS **sans réencodage** et le pousse en SRT
+partage de connexion), l'appli le décode, le redimensionne en 720p et le réencode en H.265 (débit
+piloté par l'état du lien SRT), réencode le son, emballe le tout en MPEG-TS et le pousse en SRT
 vers un PC avec OBS.
 
 ```
@@ -10,9 +11,10 @@ GoPro ──RTMP (Wi-Fi hotspot)──▶ téléphone (TurboIRL) ──SRT (4G/5
 
 ## Structure
 
-- `core/` — Kotlin pur (aucune dépendance Android) : serveur RTMP d'ingest, démux FLV, mux MPEG-TS.
-  Testable sur PC.
-- `app/` — appli Android : foreground service, envoi SRT (libsrt via srtdroid), écran d'état.
+- `core/` — Kotlin pur (aucune dépendance Android) : serveur RTMP d'ingest, mux FLV → MPEG-TS et
+  logique du relais (priorité au son, reprise sur image clé). Testable sur PC.
+- `app/` — appli Android : foreground service, réencodage vidéo/audio (MediaCodec), envoi SRT
+  (libsrt via srtdroid), pilotage de la GoPro, écran d'état.
 
 ## Compiler
 
@@ -133,7 +135,8 @@ n'étaient plus utilisés depuis la 0.9. Source GoPro conseillée : **1080p / 80
 OBS (source multimédia) perd sa synchro audio de façon durable dès que la vidéo s'interrompt
 quelques secondes, même si l'audio est continu (reproduit sur PC : `core --congest 40:5` hache le
 son dans OBS, `--trickle` non). L'appli ne laisse donc jamais de trou vidéo : mode dégradé
-(150 kb/s, 5 i/s) avec le réencodeur, image clé par seconde en direct. Si OBS hache quand même,
+(150 kb/s, 5 i/s) avec le réencodeur ; le passage direct avec image clé par seconde (`--trickle`)
+n'est plus que le mode du CLI et le secours si le réencodeur abandonne. Si OBS hache quand même,
 désactiver/réactiver la source le remet d'aplomb. En plus, `tools/recv.ps1` réencode le flux vers OBS en
 cadence constante (dernière image répétée, silence inséré) : même une coupure totale du réseau ou un
 redémarrage de la caméra ne crée pas de trou côté OBS (vérifié : test A haché, test C propre).
@@ -152,6 +155,6 @@ répétée tombait à 5 i/s ou se décalait du son.
 
 ## Limites connues
 
-- H.264 + AAC uniquement. Une seule caméra à la fois.
-- Réencodage et pilotage caméra écrits d'après la doc, à valider sur le terrain ; le journal
-  (« Partager le journal ») contient tout ce qu'il faut pour diagnostiquer.
+- En entrée : H.264 + AAC uniquement (sortie : H.265 + AAC 64 kb/s). Une seule caméra à la fois.
+- Réencodage et pilotage caméra validés en extérieur le 23/09 ; le journal (« Partager le journal »)
+  contient tout ce qu'il faut pour diagnostiquer.

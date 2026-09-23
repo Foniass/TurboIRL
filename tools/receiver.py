@@ -498,8 +498,9 @@ def main():
     ap.add_argument("--once", action="store_true", help="une seule session de décodeur puis fin (relecture)")
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--fps", type=int, default=30)
-    # 700 ms : le téléphone (≤ 0.99) met 16 trames AAC (340 ms) dans chaque PES audio, son et image arrivent par
-    # rafales de 340 ms ; avec moins de réserve la file son se vidait (micro-silences)
+    # 700 ms : la réserve absorbe les rafales du décodeur (jusqu'à ~350 ms observées en relecture de dumps) et les
+    # rafales « son d'abord » du téléphone ; avec moins de réserve la file son se vidait (micro-silences). Le
+    # téléphone écrit un PES par trame AAC : le regroupement par 16 trames vu autrefois venait du remuxage ffmpeg du dump
     ap.add_argument("--prefill-ms", type=int, default=700)
     ap.add_argument("--max-ms", type=int, default=1500)
     ap.add_argument("--in-video", type=int, default=9021)

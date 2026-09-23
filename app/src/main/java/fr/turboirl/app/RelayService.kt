@@ -36,7 +36,6 @@ class RelayService : Service() {
         val videoSuspensions: Int,
         val videoSuspendedMs: Long,
         val gopro: GoProController?,
-        val cameraLimitKbps: Int,
         val transcoder: VideoTranscoder?,
         val encoderTargetKbps: Int,
         val encoderOutKbps: Long,
@@ -50,7 +49,6 @@ class RelayService : Service() {
     private var relay: FlvToTsRelay? = null
     private var srtSender: SrtSender? = null
     private var gopro: GoProController? = null
-    @Volatile private var stopping = false
     private var transcoder: VideoTranscoder? = null
     private var abr: AdaptiveBitrate? = null
     private var audioTranscoder: AudioTranscoder? = null
@@ -65,6 +63,7 @@ class RelayService : Service() {
     private var lastRetrans = 0L
     private var lastDropped = 0L
     private var lastOverflows = 0L
+    private var lastVideoDroppedForAudio = 0L
 
     @Volatile
     var snapshot: Snapshot? = null
@@ -95,12 +94,12 @@ class RelayService : Service() {
 
         // Fixed since 0.9 (validated outdoors): phone-side re-encode in H.265 with the bitrate controller reacting
         // first, audio re-encoded, audio priority as the last resort (video withheld at 60 % of the latency).
-        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, "", logger, 0.6)
+        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, logger, 0.6)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         flvRelay.trickleKeyframes = true
-        val server = RtmpServer(config.rtmpPort, flvRelay, logger, 0)
+        val server = RtmpServer(config.rtmpPort, flvRelay, logger)
         val minKbps = 400
-        val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight, true)
+        val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight)
         flvRelay.processor = tc
         flvRelay.growingHold = false
         transcoder = tc
@@ -137,34 +136,26 @@ class RelayService : Service() {
      * the screen offers a shortcut to the tethering settings while the hotspot is off.
      */
     private fun startCamera(config: Config, flvRelay: FlvToTsRelay) {
-        startController(config, flvRelay, config.goproSsid, config.goproPassword, automatic = false, fixedIp = null)
-    }
-
-    private fun startController(config: Config, flvRelay: FlvToTsRelay, ssid: String, password: String, automatic: Boolean, fixedIp: String?) {
         gopro?.let { old ->
             gopro = null
             Thread { old.stop() }.start()
         }
+        val ssid = config.goproSsid
         val controller = GoProController(
             this,
             GoProController.Settings(
-                ssid = ssid, password = password,
+                ssid = ssid, password = config.goproPassword,
                 resolution = config.goproResolution, maxKbps = config.goproMaxKbps,
                 knownAddress = config.goproAddress.ifEmpty { null },
             ),
             logger,
             rtmpUrl = {
-                if (fixedIp != null) return@GoProController "rtmp://$fixedIp:${config.rtmpPort}/live/gopro"
-                val addresses = NetUtil.localAddresses()
-                // Soft AP interface first; the app's own hotspot may use an unusual name, so anything but the
-                // phone's Wi-Fi client (wlan0) will do then.
-                val a = addresses.firstOrNull { NetUtil.isHotspot(it.iface) }
-                    ?: if (automatic) addresses.firstOrNull { it.iface != "wlan0" } else null
-                a?.let { "rtmp://${it.ip}:${config.rtmpPort}/live/gopro" }
+                NetUtil.localAddresses().firstOrNull { NetUtil.isHotspot(it.iface) }
+                    ?.let { "rtmp://${it.ip}:${config.rtmpPort}/live/gopro" }
             },
             cameraPublishing = { flvRelay.stats.publishing },
-            onDeviceLearnt = { address, name ->
-                Config.load(this).copy(goproAddress = address, goproName = name).save(this)
+            onDeviceLearnt = { address, _ ->
+                Config.load(this).copy(goproAddress = address).save(this)
             },
         )
         controller.start()
@@ -173,7 +164,6 @@ class RelayService : Service() {
     }
 
     override fun onDestroy() {
-        stopping = true
         handler.removeCallbacksAndMessages(null)
         telemetry?.stop()
         telemetry = null
@@ -226,7 +216,6 @@ class RelayService : Service() {
             videoSuspensions = stats.videoSuspensions,
             videoSuspendedMs = stats.videoSuspendedMs,
             gopro = gopro,
-            cameraLimitKbps = 0,
             transcoder = transcoder,
             encoderTargetKbps = abr?.targetKbps ?: 0,
             encoderOutKbps = transcoder?.let { t -> val b = t.stats.bytesOut; val r = ((b - lastEncBytes) * 8 / 1000 / seconds).toLong(); lastEncBytes = b; r } ?: 0,
@@ -240,22 +229,26 @@ class RelayService : Service() {
         ticks++
         if (ticks % STATS_EVERY_TICKS == 0 && (snap.cameraConnected || snap.srt.connected)) {
             val st = snap.srt
+            val link = if (st.connected) {
+                "SRT sortie ${"%.0f".format(st.sendRateMbps * 1000)} kb/s, RTT ${"%.0f".format(st.rttMs)} ms, " +
+                    "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
+                    "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
+                    "saturations +${st.queueOverflows - lastOverflows}" +
+                    (if (snap.srt.critical) ", VIDÉO RETENUE (son seul)" else "") +
+                    (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.frameDivider > 1) " 1/${t.stats.frameDivider} cadence" else ""}, entrées ${t.stats.framesIn} décodées ${t.stats.framesDecoded} reçues GL ${t.scalerFramesReceived()} dessinées ${t.scalerFramesDrawn()} sorties ${t.stats.framesOut}, attente encodeur ${t.scalerSwapWaitMs()} ms, perdues ${t.stats.framesDropped})" } ?: "") +
+                    (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
+            } else "SRT déconnecté"
+            val restarts = snap.transcoder?.stats?.restarts ?: 0
             logger.log(
-                "Stats : reçu ${snap.inKbps} kb/s · envoyé ${snap.outKbps} kb/s · " +
-                    if (st.connected) {
-                        "SRT sortie ${"%.0f".format(st.sendRateMbps * 1000)} kb/s, RTT ${"%.0f".format(st.rttMs)} ms, " +
-                            "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
-                            "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
-                            "saturations +${st.queueOverflows - lastOverflows}" +
-                            (if (snap.srt.critical) ", VIDÉO RETENUE (son seul)" else "") +
-                            (if (snap.cameraLimitKbps > 0) ", frein caméra ${snap.cameraLimitKbps} kb/s" else "") +
-                            (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.frameDivider > 1) " 1/${t.stats.frameDivider} cadence" else ""}, entrées ${t.stats.framesIn} décodées ${t.stats.framesDecoded} reçues GL ${t.scalerFramesReceived()} dessinées ${t.scalerFramesDrawn()} sorties ${t.stats.framesOut}, attente encodeur ${t.scalerSwapWaitMs()} ms, perdues ${t.stats.framesDropped})" } ?: "") +
-                            (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
-                    } else "SRT déconnecté"
+                "Stats : reçu ${snap.inKbps} kb/s · envoyé ${snap.outKbps} kb/s · " + link +
+                    ", vidéo jetée (mode critique) +${st.videoDroppedForAudio - lastVideoDroppedForAudio}" +
+                    (audioTranscoder?.let { a -> ", son réencodé ${a.stats.framesIn}→${a.stats.framesOut} (perdues ${a.stats.dropped})" } ?: "") +
+                    (if (restarts > 0) ", redémarrages transcodeur $restarts" else "")
             )
             lastRetrans = st.retransmitted
             lastDropped = st.dropped
             lastOverflows = st.queueOverflows
+            lastVideoDroppedForAudio = st.videoDroppedForAudio
         }
 
         val camera = if (snap.cameraConnected) "GoPro ✓ ${snap.inKbps} kb/s" + (if (snap.videoSuspended) " (son seul)" else "") else "GoPro ✗"

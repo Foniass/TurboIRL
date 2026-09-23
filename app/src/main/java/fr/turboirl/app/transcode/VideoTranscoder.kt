@@ -16,36 +16,31 @@ import java.nio.ByteBuffer
 import java.util.ArrayDeque
 
 /**
- * Hardware H.264 → H.264 transcoder. The camera's frames are decoded onto a [GlScaler], which
- * draws them at the output resolution into the encoder's input surface. Bitrate changes at any
- * time; the output resolution can change too (the encoder alone is recreated). Everything
- * codec-related runs on one handler thread.
+ * Hardware H.264 → H.265 transcoder (H.264 output if the phone has no hardware HEVC encoder).
+ * The camera's frames are decoded onto a [GlScaler], which draws them at the output resolution
+ * into the encoder's input surface. Bitrate changes at any time; the output resolution can
+ * change too (the encoder alone is recreated). Everything codec-related runs on one handler
+ * thread.
  */
 class VideoTranscoder(
     private val sink: EncodedVideoSink,
     private val logger: Logger,
     initialKbps: Int,
     initialHeight: Int,
-    private val preferHevc: Boolean = false,
 ) : VideoProcessor {
 
     class Stats {
-        @Volatile var bitrateKbps = 0
-        @Volatile var halfRate = false
+        /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
         @Volatile var frameDivider = 1
         @Volatile var width = 0
         @Volatile var height = 0
-        @Volatile var inputWidth = 0
-        @Volatile var inputHeight = 0
         @Volatile var framesIn = 0L
         @Volatile var framesOut = 0L
         @Volatile var framesDecoded = 0L
-        @Volatile var framesDrawn = 0L
         @Volatile var framesDropped = 0L
         @Volatile var bytesOut = 0L
         @Volatile var restarts = 0
         @Volatile var resolutionChanges = 0
-        @Volatile var hevc = false
     }
 
     val stats = Stats()
@@ -87,10 +82,6 @@ class VideoTranscoder(
 
     @Volatile private var targetKbps = initialKbps
     private var cbrLogged = false
-
-    init {
-        stats.bitrateKbps = initialKbps
-    }
 
     // ---------------------------------------------------------------- VideoProcessor (RTMP thread)
 
@@ -141,7 +132,6 @@ class VideoTranscoder(
     fun setBitrate(kbps: Int) {
         if (kbps == targetKbps) return
         targetKbps = kbps
-        stats.bitrateKbps = kbps
         handler.post {
             try {
                 encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, kbps * 1000) })
@@ -158,7 +148,6 @@ class VideoTranscoder(
     /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
     fun setFrameDivider(divider: Int) {
         stats.frameDivider = divider
-        stats.halfRate = divider > 1
         scaler?.frameDivider = divider
     }
 
@@ -223,9 +212,8 @@ class VideoTranscoder(
         }
     }
 
-    /** H.265 when asked for and a hardware encoder exists for it, else H.264. */
+    /** H.265 when a hardware encoder exists for it, else H.264. */
     private fun pickOutputMime(): String {
-        if (!preferHevc) return MIME
         val hasHevc = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
             info.isEncoder && info.isHardwareAccelerated && info.supportedTypes.any { it.equals(MIME_HEVC, ignoreCase = true) }
         }
@@ -255,7 +243,6 @@ class VideoTranscoder(
             }
         }
         outputHevc = mime == MIME_HEVC
-        stats.hevc = outputHevc
         encoderVps = null
         enc.setCallback(encoderCallback, handler)
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
@@ -415,8 +402,6 @@ class VideoTranscoder(
             if (codec !== decoder) return
             val w = format.getInteger(MediaFormat.KEY_WIDTH)
             val h = format.getInteger(MediaFormat.KEY_HEIGHT)
-            stats.inputWidth = w
-            stats.inputHeight = h
             if (w != inWidth || h != inHeight) {
                 logger.log("Décodeur : la caméra envoie du ${w}x$h")
                 inWidth = w

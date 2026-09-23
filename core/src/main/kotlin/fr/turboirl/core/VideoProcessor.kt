@@ -1,9 +1,9 @@
 package fr.turboirl.core
 
 /**
- * Optional stage between the camera's H.264 and the muxer (a transcoder). Frames are handed
- * over in Annex B on the relay's output timeline; whatever comes back through [EncodedVideoSink]
- * is muxed in place of the original video.
+ * Re-encoding stage between the camera's H.264 and the muxer (a transcoder; always on in the
+ * app, absent in the CLI). Frames are handed over in Annex B on the relay's output timeline;
+ * whatever comes back through [EncodedVideoSink] is muxed in place of the original video.
  */
 interface VideoProcessor {
     /** False when the processor gave up: the relay then muxes the camera's video untouched. */

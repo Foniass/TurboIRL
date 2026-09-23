@@ -29,6 +29,8 @@ class Telemetry(private val context: Context) {
 
     private val file = File(context.filesDir, "telemetrie.csv")
     private val previous = File(context.filesDir, "telemetrie-precedente.csv")
+    /** A file written with an older set of columns is parked here (not shared) rather than mixed in. */
+    private val outdated = File(context.filesDir, "telemetrie-ancien.csv")
     private val time = SimpleDateFormat("HH:mm:ss", Locale.FRANCE)
     private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -51,13 +53,12 @@ class Telemetry(private val context: Context) {
             previous.delete()
             file.renameTo(previous)
         }
-        if (!file.exists() || file.length() == 0L) {
-            write(
-                "heure,srt,tampon_ms,rtt_ms,srt_sortie_kbps,retransmis,perdus,recu_kbps,envoye_kbps,video_suspendue," +
-                    "enc_cible_kbps,enc_reel_kbps,enc_largeur,enc_hauteur,demi_cadence,images_perdues,frein_kbps," +
-                    "gopro_etat,gopro_kbps,batterie_pct,temp_c,thermique,signal_dbm,reseau,lat,lon,vitesse_kmh,precision_m\n"
-            )
+        // The header is only written once per file: if the columns changed since, start a fresh file
+        if (file.exists() && file.length() > 0 && firstLine() != HEADER) {
+            outdated.delete()
+            file.renameTo(outdated)
         }
+        if (!file.exists() || file.length() == 0L) write(HEADER + "\n")
         write("# session ${SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.FRANCE).format(Date())}\n")
         if (Build.VERSION.SDK_INT >= 31 &&
             context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
@@ -101,7 +102,12 @@ class Telemetry(private val context: Context) {
         displayCallback = null
     }
 
-    fun files(): List<File> = listOf(previous, file).filter { it.exists() && it.length() > 0 }
+    private fun firstLine(): String? =
+        try {
+            file.bufferedReader().use { it.readLine() }
+        } catch (_: IOException) {
+            null
+        }
 
     @SuppressLint("MissingPermission")
     fun row(s: RelayService.Snapshot) {
@@ -149,9 +155,8 @@ class Telemetry(private val context: Context) {
                 s.encoderOutKbps,
                 t?.width ?: "",
                 t?.height ?: "",
-                if (t?.halfRate == true) 1 else 0,
+                t?.frameDivider ?: "",
                 t?.framesDropped ?: "",
-                s.cameraLimitKbps,
                 g?.state?.name ?: "",
                 g?.cameraBitrateKbps ?: "",
                 pct,
@@ -186,5 +191,10 @@ class Telemetry(private val context: Context) {
 
     private companion object {
         const val MAX_BYTES = 4 * 1024 * 1024
+        // diviseur_cadence : 1 = 30 i/s, 2 = 15 i/s, 6 = 5 i/s (remplace demi_cadence)
+        const val HEADER =
+            "heure,srt,tampon_ms,rtt_ms,srt_sortie_kbps,retransmis,perdus,recu_kbps,envoye_kbps,video_suspendue," +
+                "enc_cible_kbps,enc_reel_kbps,enc_largeur,enc_hauteur,diviseur_cadence,images_perdues," +
+                "gopro_etat,gopro_kbps,batterie_pct,temp_c,thermique,signal_dbm,reseau,lat,lon,vitesse_kmh,precision_m"
     }
 }

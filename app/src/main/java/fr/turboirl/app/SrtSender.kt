@@ -18,10 +18,9 @@ class SrtSender(
     private val host: String,
     private val port: Int,
     private val latencyMs: Int,
-    private val streamId: String,
     private val logger: Logger,
     /** Send-buffer occupancy (fraction of the latency) above which video gets withheld. */
-    congestOnFraction: Double = 0.4,
+    congestOnFraction: Double = 0.6,
 ) : TsSink {
 
     class Stats {
@@ -90,7 +89,6 @@ class SrtSender(
                 socket.setSockFlag(SockOpt.PAYLOADSIZE, TsMuxer.MAX_BATCH)
                 socket.setSockFlag(SockOpt.LATENCY, latencyMs)
                 socket.setSockFlag(SockOpt.CONNTIMEO, 4000)
-                if (streamId.isNotEmpty()) socket.setSockFlag(SockOpt.STREAMID, streamId)
                 socket.connect(host, port)
 
                 logger.log("SRT connecté à $host:$port (latence $latencyMs ms)")

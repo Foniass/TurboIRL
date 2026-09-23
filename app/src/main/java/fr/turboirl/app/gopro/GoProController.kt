@@ -289,7 +289,7 @@ class GoProController(
             1080 -> 12L
             else -> 7L
         }
-        val max = settings.maxKbps.coerceIn(800, 8000).toLong()
+        val max = settings.maxKbps.coerceIn(800, 10000).toLong() // the Hero 12 accepts 800 to 10 000 kb/s
         val mode = Proto.Writer()
             .string(1, url)
             .bool(2, false) // no SD copy while streaming: the live is the only job (heat)
@@ -408,14 +408,13 @@ class GoProController(
         }
         m.int(2)?.let { liveError = it }
         if (!capabilitiesLogged && (m.int(9) != null || m.longs(5).isNotEmpty())) {
-            // Static limits of the camera's live encoder (Open GoPro NotifyLiveStreamStatus fields 5/6/8/9):
+            // Static limits of the camera's live encoder (Open GoPro NotifyLiveStreamStatus fields 5/8/9):
             // the bitrate we ask for is only a wish, this is what the camera can actually do
             capabilitiesLogged = true
             val sizes = m.longs(5).ifEmpty { packedVarints(m, 5) }.map { WINDOW_LABELS[it.toInt()] ?: "taille $it" }
             logger.log(
                 "GoPro : capacités du live — débit ${m.int(8) ?: "?"} à ${m.int(9) ?: "?"} kb/s, " +
-                    "résolutions ${sizes.ifEmpty { listOf("?") }.joinToString("/")}, " +
-                    "enregistrement carte SD pendant le live ${if (m.bool(6) == true) "possible" else "non"}"
+                    "résolutions ${sizes.ifEmpty { listOf("?") }.joinToString("/")}"
             )
         }
         m.int(4)?.let {

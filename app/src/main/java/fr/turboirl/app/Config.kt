@@ -17,7 +17,6 @@ data class Config(
     val goproResolution: Int,
     val goproMaxKbps: Int,
     val goproAddress: String,
-    val goproName: String,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -35,7 +34,6 @@ data class Config(
             .putInt("goproResolution", goproResolution)
             .putInt("goproMaxKbps", goproMaxKbps)
             .putString("goproAddress", goproAddress)
-            .putString("goproName", goproName)
             .apply()
     }
 
@@ -60,7 +58,6 @@ data class Config(
                 goproResolution = p.getInt("goproResolution", 720),
                 goproMaxKbps = p.getInt("goproMaxKbps", 4000),
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
-                goproName = p.getString("goproName", "").orEmpty(),
             )
         }
     }

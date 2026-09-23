@@ -13,12 +13,7 @@ class RtmpServer(
     private val port: Int,
     private val listener: RtmpListener,
     private val logger: Logger,
-    /** Small socket receive buffer so that a read slow-down reaches the camera quickly. */
-    private val receiveBufferBytes: Int = 0,
 ) {
-    /** Throttle on the publisher's bytes, shared by all sessions. */
-    val limiter = ReadLimiter()
-
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
 
@@ -26,14 +21,10 @@ class RtmpServer(
     private var current: RtmpSession? = null
     private var currentThread: Thread? = null
 
-    /** Bytes received on the active connection, 0 when nobody is connected. */
-    val sessionBytesReceived: Long get() = current?.bytesReceived ?: 0
-
     @Throws(IOException::class)
     fun start() {
         val ss = ServerSocket()
         ss.reuseAddress = true
-        if (receiveBufferBytes > 0) ss.receiveBufferSize = receiveBufferBytes
         ss.bind(InetSocketAddress(port))
         serverSocket = ss
         acceptThread = Thread({ acceptLoop(ss) }, "rtmp-accept").apply {
@@ -64,7 +55,7 @@ class RtmpServer(
             }
             logger.log("RTMP : connexion de ${socket.remoteSocketAddress.toString().removePrefix("/")}")
             endCurrentSession()
-            val session = RtmpSession(socket, listener, logger, limiter)
+            val session = RtmpSession(socket, listener, logger)
             current = session
             currentThread = Thread({
                 session.run()

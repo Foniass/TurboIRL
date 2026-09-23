@@ -120,7 +120,7 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Débit du son entre 32 et 160 kb/s", Toast.LENGTH_LONG).show()
             return
         }
-        if (outMax == null || outMax !in 500..8000 || outH !in setOf(480, 720, 1080)) {
+        if (outMax == null || outH == null || outMax !in 500..8000 || outH !in setOf(480, 720, 1080)) {
             Toast.makeText(this, "Débit max entre 500 et 8000 kb/s, résolution max 480, 720 ou 1080", Toast.LENGTH_LONG).show()
             return
         }
@@ -144,12 +144,13 @@ class MainActivity : Activity() {
         }
         Config.load(this).copy(
             srtHost = host, srtPort = port, srtLatencyMs = latency,
-            outMaxKbps = outMax ?: 3000,
-            outMaxHeight = outH ?: 720,
-            audioKbps = aKbps ?: 64,
+            outMaxKbps = outMax,
+            outMaxHeight = outH,
+            audioKbps = aKbps,
             goproEnabled = goproOn,
             goproSsid = goproSsid.text.toString().trim(),
             goproPassword = goproPassword.text.toString(),
+            // Only validated when the camera is driven by the app: keep a sane value otherwise
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
         ).save(this)
@@ -212,12 +213,11 @@ class MainActivity : Activity() {
         }
         val enc = s.transcoder?.let { t ->
             "\n       encodeur ${s.encoderTargetKbps} kb/s cible · ${s.encoderOutKbps} kb/s réel · ${t.stats.width}x${t.stats.height}" +
-                (if (t.stats.halfRate) " · 15 i/s" else " · 30 i/s") + " · images perdues ${t.stats.framesDropped}" +
+                " · ${30 / t.stats.frameDivider.coerceAtLeast(1)} i/s" + " · images perdues ${t.stats.framesDropped}" +
                 (if (!t.active) "\n       ⚠ réencodage abandonné, vidéo caméra directe" else "")
         } ?: ""
-        val brake = if (s.cameraLimitKbps > 0) "\n       frein caméra ${s.cameraLimitKbps} kb/s" else ""
         val pauses = if (s.videoSuspensions > 0) " · vidéo en pause ${s.videoSuspensions}× (${s.videoSuspendedMs / 1000} s)" else ""
-        return "$camera\n$srt$brake$enc\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
+        return "$camera\n$srt$enc\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
     }
 
     private fun openTetheringSettings() {

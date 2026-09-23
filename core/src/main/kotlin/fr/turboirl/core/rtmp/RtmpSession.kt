@@ -16,7 +16,6 @@ class RtmpSession(
     private val socket: Socket,
     private val listener: RtmpListener,
     private val logger: Logger,
-    private val limiter: ReadLimiter = ReadLimiter(),
 ) {
     private class ChunkStream {
         var timestamp = 0L
@@ -48,8 +47,6 @@ class RtmpSession(
     private var lastAckAt = 0L
     private var app = ""
     private var publishing = false
-
-    val bytesReceived: Long get() = counter.count
 
     fun run() {
         var reason = "connexion fermée"
@@ -137,7 +134,6 @@ class RtmpSession(
             cs.read = 0
         }
         val n = minOf(inChunkSize, cs.length - cs.read)
-        limiter.acquire(n)
         input.readFully(payload, cs.read, n)
         cs.read += n
         if (cs.read >= cs.length) {
