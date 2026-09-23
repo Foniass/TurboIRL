@@ -11,6 +11,7 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Process
 import android.view.Surface
 import fr.turboirl.core.rtmp.Logger
 import java.nio.ByteBuffer
@@ -25,7 +26,8 @@ import java.util.concurrent.CountDownLatch
  */
 class GlScaler(private val logger: Logger) {
 
-    private val thread = HandlerThread("gl-scaler").apply { start() }
+    // Frames that arrive while this thread is late are silently replaced by the SurfaceTexture: keep it snappy
+    private val thread = HandlerThread("gl-scaler", Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
 
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
@@ -54,6 +56,15 @@ class GlScaler(private val logger: Logger) {
 
     @Volatile var framesDrawn = 0L
         private set
+
+    /** Frames the SurfaceTexture handed us (updateTexImage calls that produced a new picture). */
+    @Volatile var framesReceived = 0L
+        private set
+
+    /** Time spent inside eglSwapBuffers, i.e. waiting for the encoder, in ms. */
+    @Volatile var swapWaitMs = 0L
+        private set
+    private var lastTimestamp = -1L
 
     init {
         val ready = CountDownLatch(1)
@@ -162,6 +173,11 @@ class GlScaler(private val logger: Logger) {
         } catch (e: Exception) {
             return
         }
+        val ts = surfaceTexture.timestamp
+        if (ts != lastTimestamp) {
+            lastTimestamp = ts
+            framesReceived++
+        }
         frameCount++
         val divider = frameDivider.coerceAtLeast(1)
         if (window == EGL14.EGL_NO_SURFACE || frameCount % divider != 0L) return
@@ -181,7 +197,9 @@ class GlScaler(private val logger: Logger) {
         GLES20.glDisableVertexAttribArray(aTexCoord)
 
         EGLExt.eglPresentationTimeANDROID(display, window, surfaceTexture.timestamp)
+        val t0 = System.nanoTime()
         if (EGL14.eglSwapBuffers(display, window)) framesDrawn++
+        swapWaitMs += (System.nanoTime() - t0) / 1_000_000
     }
 
     private fun buildProgram(): Int {

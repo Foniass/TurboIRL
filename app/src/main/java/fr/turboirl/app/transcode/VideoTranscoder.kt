@@ -147,6 +147,8 @@ class VideoTranscoder(
     }
 
     fun scalerFramesDrawn(): Long = scaler?.framesDrawn ?: 0
+    fun scalerFramesReceived(): Long = scaler?.framesReceived ?: 0
+    fun scalerSwapWaitMs(): Long = scaler?.swapWaitMs ?: 0
 
     /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
     fun setFrameDivider(divider: Int) {
