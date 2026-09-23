@@ -37,6 +37,8 @@ class VideoTranscoder(
         @Volatile var inputHeight = 0
         @Volatile var framesIn = 0L
         @Volatile var framesOut = 0L
+        @Volatile var framesDecoded = 0L
+        @Volatile var framesDrawn = 0L
         @Volatile var framesDropped = 0L
         @Volatile var bytesOut = 0L
         @Volatile var restarts = 0
@@ -137,6 +139,8 @@ class VideoTranscoder(
             }
         }
     }
+
+    fun scalerFramesDrawn(): Long = scaler?.framesDrawn ?: 0
 
     /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
     fun setFrameDivider(divider: Int) {
@@ -335,6 +339,7 @@ class VideoTranscoder(
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (codec !== decoder) return
+            if (info.size > 0) stats.framesDecoded++
             try {
                 codec.releaseOutputBuffer(index, info.size > 0)
             } catch (e: Exception) {

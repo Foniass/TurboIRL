@@ -242,7 +242,7 @@ class RelayService : Service() {
                             "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
                             "saturations +${st.queueOverflows - lastOverflows}" +
                             (if (snap.cameraLimitKbps > 0) ", frein caméra ${snap.cameraLimitKbps} kb/s" else "") +
-                            (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.halfRate) " 15 i/s" else ""}, perdues ${t.stats.framesDropped})" } ?: "") +
+                            (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.frameDivider > 1) " 1/${t.stats.frameDivider} cadence" else ""}, entrées ${t.stats.framesIn} décodées ${t.stats.framesDecoded} dessinées ${t.scalerFramesDrawn()} sorties ${t.stats.framesOut}, perdues ${t.stats.framesDropped})" } ?: "") +
                             (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
                     } else "SRT déconnecté"
             )

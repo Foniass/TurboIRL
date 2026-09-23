@@ -129,15 +129,16 @@ class AdaptiveBitrate(
                     outSamples.clear()
                 }
                 outSamples.addLast(now to transcoder.stats.bytesOut)
-                while (outSamples.size > 1 && now - outSamples.first().first > 3000) outSamples.removeFirst()
+                while (outSamples.size > 1 && now - outSamples.first().first > 5000) outSamples.removeFirst()
                 val oldest = outSamples.first()
-                if (!suspended && now - lastTargetChange >= 3000 && now - oldest.first >= 2000) {
+                // 5 s window (keyframes every 2 s would fool a shorter one), gentle steps, quick recovery
+                if (!suspended && now - lastTargetChange >= 3000 && now - oldest.first >= 4000) {
                     val measuredKbps = ((transcoder.stats.bytesOut - oldest.second) * 8 / (now - oldest.first)).toInt()
                     val requested = (target * correction).toInt()
-                    if (measuredKbps > requested * 125 / 100 && measuredKbps > minKbps) {
-                        correction = (correction * 0.93).coerceAtLeast(0.6)
-                    } else if (measuredKbps < requested * 90 / 100 && correction < 1.0) {
-                        correction = (correction * 1.05).coerceAtMost(1.0)
+                    if (measuredKbps > requested * 13 / 10 && measuredKbps > minKbps) {
+                        correction = (correction * 0.95).coerceAtLeast(0.7)
+                    } else if (measuredKbps < requested * 105 / 100 && correction < 1.0) {
+                        correction = (correction * 1.04).coerceAtMost(1.0)
                     }
                     if (now - lastCorrectionLog > 10_000 && correction < 0.95) {
                         lastCorrectionLog = now
