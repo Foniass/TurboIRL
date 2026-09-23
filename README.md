@@ -81,10 +81,12 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
 2. Dans l'appli : bouton « Autoriser l'exécution en arrière-plan ».
 3. Réglages HyperOS → Applications → TurboIRL : **Démarrage automatique** activé, Économie
    de batterie → **Aucune restriction**. Dans les applis récentes, appui long sur TurboIRL → cadenas.
-4. Localisation activée (le hotspot automatique en a besoin) et partage de connexion du téléphone
-   **éteint** : depuis la 1.1 l'appli ouvre son propre hotspot (nom et mot de passe aléatoires qu'elle
-   donne elle-même à la caméra). Si ça échoue, elle se rabat sur le hotspot du téléphone si les champs
-   « secours » sont remplis.
+4. Wi-Fi et localisation activés, partage de connexion du téléphone **éteint** : l'appli ouvre son
+   propre point d'accès et en donne elle-même les identifiants à la caméra. Trois essais dans l'ordre
+   (1.2) : groupe Wi-Fi Direct « DIRECT-GP-TurboIRL » (WPA2, 2,4 GHz, adresse fixe 192.168.49.1, que la
+   caméra garde en réseau connu), puis hotspot local Android (nom aléatoire, sécurité et bande choisies
+   par le système : sur le Redmi la caméra le voit mais n'arrive pas à s'y associer), puis le hotspot du
+   téléphone si les champs « secours » sont remplis.
 5. Saisir l'adresse du PC (nom DynDNS), port 9000, latence 12000 ms → **Démarrer**.
 
 ### 3. GoPro Hero 12

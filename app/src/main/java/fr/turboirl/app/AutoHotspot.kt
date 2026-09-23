@@ -64,7 +64,15 @@ class AutoHotspot(private val context: Context, private val logger: Logger) {
         // The band (2.4 / 5 GHz) is chosen by the system and not readable from a normal app.
         if (Build.VERSION.SDK_INT >= 30) {
             val c = r.softApConfiguration
-            return Triple(c.ssid, c.passphrase, "")
+            val security = when (c.securityType) {
+                0 -> "ouvert"
+                1 -> "WPA2"
+                2 -> "WPA2/WPA3"
+                3 -> "WPA3 seulement"
+                4, 5 -> "OWE"
+                else -> "sécurité ${c.securityType}"
+            }
+            return Triple(c.ssid, c.passphrase, " ($security)")
         }
         val c = r.wifiConfiguration ?: return Triple(null, null, "")
         return Triple(c.SSID?.trim('"'), c.preSharedKey?.trim('"'), "")

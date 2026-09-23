@@ -51,6 +51,7 @@ class RelayService : Service() {
     private var srtSender: SrtSender? = null
     private var gopro: GoProController? = null
     private var hotspot: AutoHotspot? = null
+    private var p2p: P2pHotspot? = null
     @Volatile private var stopping = false
     private var transcoder: VideoTranscoder? = null
     private var abr: AdaptiveBitrate? = null
@@ -131,20 +132,43 @@ class RelayService : Service() {
         return START_STICKY
     }
 
-    /** Opens the app's own hotspot, then drives the camera with its credentials (manual hotspot as fallback). */
+    /**
+     * Opens a hotspot the app controls, then drives the camera with its credentials. Three tries in order:
+     * Wi-Fi Direct group (WPA2, 2.4 GHz, fixed name → the camera keeps it as a known network), Android's
+     * local-only hotspot (random name, security/band chosen by the system), the phone's own tethering
+     * (fields « secours », to switch on by hand).
+     */
     private fun startCamera(config: Config, flvRelay: FlvToTsRelay) {
+        val p = P2pHotspot(this, logger)
+        p2p = p
+        p.start(
+            handler,
+            onReady = { ssid, password ->
+                if (!stopping) startController(config, flvRelay, ssid, password, automatic = true, fixedIp = P2pHotspot.OWNER_IP)
+            },
+            onFailed = { reason ->
+                if (stopping) return@start
+                logger.log("Hotspot Wi-Fi Direct impossible ($reason) : essai du hotspot local Android")
+                p.stop()
+                p2p = null
+                startLocalOnlyHotspot(config, flvRelay)
+            },
+        )
+    }
+
+    private fun startLocalOnlyHotspot(config: Config, flvRelay: FlvToTsRelay) {
         val hs = AutoHotspot(this, logger)
         hotspot = hs
         hs.start(
             handler,
             onReady = { ssid, password ->
-                if (!stopping) startController(config, flvRelay, ssid, password, automatic = true)
+                if (!stopping) startController(config, flvRelay, ssid, password, automatic = true, fixedIp = null)
             },
             onFailed = { reason ->
                 if (stopping) return@start
                 if (config.goproSsid.isNotEmpty() && config.goproPassword.length >= 8) {
                     logger.log("Hotspot automatique impossible ($reason) : hotspot de secours « ${config.goproSsid} », à allumer à la main")
-                    startController(config, flvRelay, config.goproSsid, config.goproPassword, automatic = false)
+                    startController(config, flvRelay, config.goproSsid, config.goproPassword, automatic = false, fixedIp = null)
                 } else {
                     logger.log("Hotspot automatique impossible ($reason) et pas de hotspot de secours renseigné : GoPro non pilotée")
                 }
@@ -161,7 +185,7 @@ class RelayService : Service() {
         )
     }
 
-    private fun startController(config: Config, flvRelay: FlvToTsRelay, ssid: String, password: String, automatic: Boolean) {
+    private fun startController(config: Config, flvRelay: FlvToTsRelay, ssid: String, password: String, automatic: Boolean, fixedIp: String?) {
         gopro?.let { old ->
             gopro = null
             Thread { old.stop() }.start()
@@ -175,6 +199,7 @@ class RelayService : Service() {
             ),
             logger,
             rtmpUrl = {
+                if (fixedIp != null) return@GoProController "rtmp://$fixedIp:${config.rtmpPort}/live/gopro"
                 val addresses = NetUtil.localAddresses()
                 // Soft AP interface first; the app's own hotspot may use an unusual name, so anything but the
                 // phone's Wi-Fi client (wlan0) will do then.
@@ -189,7 +214,7 @@ class RelayService : Service() {
         )
         controller.start()
         gopro = controller
-        logger.log("Pilotage GoPro activé (${if (automatic) "hotspot automatique" else "hotspot du téléphone"} « $ssid »)")
+        logger.log("Pilotage GoPro activé (${if (fixedIp != null) "Wi-Fi Direct" else if (automatic) "hotspot local Android" else "hotspot du téléphone"} « $ssid »)")
     }
 
     override fun onDestroy() {
@@ -197,6 +222,8 @@ class RelayService : Service() {
         handler.removeCallbacksAndMessages(null)
         hotspot?.stop()
         hotspot = null
+        p2p?.stop()
+        p2p = null
         telemetry?.stop()
         telemetry = null
         val server = rtmpServer
