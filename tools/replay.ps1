@@ -3,8 +3,8 @@
   Sert à reproduire sur le PC ce que le viewer a vu, et à valider une correction du récepteur sans sortie terrain.
 
   replay.py renvoie le dump en UDP local à la cadence des PTS audio (fidèle au direct, y compris pendant les
-  trous vidéo — « ffmpeg -re » s'endormirait sur les sauts vidéo), et ffmpeg le réencode vers OBS comme en direct.
-  Nécessite python (3.x) dans le PATH.
+  trous vidéo — « ffmpeg -re » s'endormirait sur les sauts vidéo), puis décodeur -> repeater.py -> encodeur
+  comme en direct. Nécessite python (3.x) dans le PATH.
 
   Usage :  powershell -ExecutionPolicy Bypass -File tools\replay.ps1 -Dump dumps\dump-20260923-181204.ts [-StartSec 440] [-DurationSec 60] [-ObsPort 9001]
 #>
@@ -24,12 +24,19 @@ $Dump = (Resolve-Path $Dump).Path
 
 Write-Host "Relecture de $Dump (début $StartSec s, durée $(if ($DurationSec -gt 0) { "$DurationSec s" } else { 'totale' })) -> udp://127.0.0.1:$ObsPort"
 
-# ffmpeg d'abord (il doit écouter avant que les paquets partent), fin automatique 5 s après le dernier paquet
+$repeater = Start-Repeater
+Start-Sleep -Milliseconds 500
+$encoder = Start-Encoder $ObsPort
+# décodeur : lit l'UDP local, fin automatique 5 s après le dernier paquet
 $src = "udp://127.0.0.1:${LoopPort}?timeout=5000000&fifo_size=100000"
-$ff = Start-Process ffmpeg -NoNewWindow -PassThru -ArgumentList (
-    @("-hide_banner", "-loglevel", "warning", "-stats", "-stats_period", "5") + $InputArgs + @("-i", $src) + (ObsOutputArgs $ObsPort)
+$decoder = Start-Process ffmpeg -NoNewWindow -PassThru -ArgumentList (
+    @("-hide_banner", "-loglevel", "warning", "-stats", "-stats_period", "5") + $InputArgs + @("-i", $src) + (DecoderOutputArgs)
 )
 Start-Sleep -Milliseconds 800
-
-& python (Join-Path $PSScriptRoot "replay.py") $Dump --start $StartSec --duration $DurationSec --port $LoopPort
-$ff.WaitForExit()
+try {
+    & python (Join-Path $PSScriptRoot "replay.py") $Dump --start $StartSec --duration $DurationSec --port $LoopPort
+    $decoder.WaitForExit()
+    Start-Sleep 2  # laisse l'encodeur écouler la fin
+} finally {
+    foreach ($p in @($decoder, $encoder, $repeater)) { if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+}
