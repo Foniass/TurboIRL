@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var toggle: Button
     private lateinit var battery: Button
     private lateinit var share: Button
+    private lateinit var tethering: Button
     private lateinit var outMaxKbps: EditText
     private lateinit var outMaxHeight: EditText
     private lateinit var audioKbps: EditText
@@ -52,6 +53,7 @@ class MainActivity : Activity() {
         toggle = findViewById(R.id.toggle)
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
+        tethering = findViewById(R.id.tethering)
         outMaxKbps = findViewById(R.id.outMaxKbps)
         outMaxHeight = findViewById(R.id.outMaxHeight)
         audioKbps = findViewById(R.id.audioKbps)
@@ -82,12 +84,12 @@ class MainActivity : Activity() {
         toggle.setOnClickListener { if (RelayService.instance != null) RelayService.stop(this) else startRelay() }
         battery.setOnClickListener { requestBatteryExemption() }
         share.setOnClickListener { shareLog() }
+        tethering.setOnClickListener { openTetheringSettings() }
 
         val wanted = ArrayList<String>()
         if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
         wanted.add(Manifest.permission.ACCESS_FINE_LOCATION)
         wanted.add(Manifest.permission.READ_PHONE_STATE)
-        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.NEARBY_WIFI_DEVICES) // hotspot automatique
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
@@ -126,8 +128,8 @@ class MainActivity : Activity() {
         val resolution = goproResolution.text.toString().toIntOrNull()
         val maxKbps = goproMaxKbps.text.toString().toIntOrNull()
         if (goproOn) {
-            if (goproSsid.text.isNotBlank() && goproPassword.text.length < 8) {
-                Toast.makeText(this, "Le mot de passe du hotspot de secours fait au moins 8 caractères", Toast.LENGTH_LONG).show()
+            if (goproSsid.text.isBlank() || goproPassword.text.length < 8) {
+                Toast.makeText(this, "Nom et mot de passe du hotspot du téléphone requis pour piloter la GoPro", Toast.LENGTH_LONG).show()
                 return
             }
             if (resolution !in setOf(480, 720, 1080) || maxKbps == null || maxKbps !in 800..10000) {
@@ -167,14 +169,16 @@ class MainActivity : Activity() {
             gp != null -> "GoPro ${gp.cameraName} : ${gp.state.label}" +
                 (if (gp.detail.isNotEmpty()) "\n  ${gp.detail}" else "") +
                 (if (gp.cameraBitrateKbps > 0) "\n  débit caméra ${gp.cameraBitrateKbps} kb/s" else "")
-            running -> "Pilotage désactivé : la GoPro se règle à la main (URL ci-dessous, partage de connexion à allumer)"
+            running -> "Pilotage désactivé : la GoPro se règle à la main (URL ci-dessous)"
             else -> ""
         }
 
         val rtmpPort = Config.load(this).rtmpPort
         val addresses = NetUtil.localAddresses()
+        // Hotspot off while the relay runs: one tap to the tethering settings
+        tethering.visibility = if (running && addresses.none { NetUtil.isHotspot(it.iface) }) View.VISIBLE else View.GONE
         rtmpUrl.text = if (addresses.isEmpty()) {
-            "Aucune adresse locale (le hotspot automatique s'ouvre au démarrage)."
+            "Aucune adresse locale : active le partage de connexion."
         } else {
             addresses.joinToString("\n") { "rtmp://${it.ip}:$rtmpPort/live/gopro   (${it.iface})" }
         }
@@ -214,6 +218,18 @@ class MainActivity : Activity() {
         val brake = if (s.cameraLimitKbps > 0) "\n       frein caméra ${s.cameraLimitKbps} kb/s" else ""
         val pauses = if (s.videoSuspensions > 0) " · vidéo en pause ${s.videoSuspensions}× (${s.videoSuspendedMs / 1000} s)" else ""
         return "$camera\n$srt$brake$enc\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
+    }
+
+    private fun openTetheringSettings() {
+        try {
+            startActivity(Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"))
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+            } catch (_: Exception) {
+                Toast.makeText(this, "Ouvre les réglages du partage de connexion à la main", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun shareLog() {

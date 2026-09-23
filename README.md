@@ -81,18 +81,16 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
 2. Dans l'appli : bouton « Autoriser l'exécution en arrière-plan ».
 3. Réglages HyperOS → Applications → TurboIRL : **Démarrage automatique** activé, Économie
    de batterie → **Aucune restriction**. Dans les applis récentes, appui long sur TurboIRL → cadenas.
-4. Wi-Fi et localisation activés, partage de connexion du téléphone **éteint** : l'appli ouvre son
-   propre point d'accès et en donne elle-même les identifiants à la caméra. Trois essais dans l'ordre
-   (1.2) : groupe Wi-Fi Direct « DIRECT-GP-TurboIRL » (WPA2, 2,4 GHz, adresse fixe 192.168.49.1, que la
-   caméra garde en réseau connu), puis hotspot local Android (nom aléatoire, sécurité et bande choisies
-   par le système : sur le Redmi la caméra le voit mais n'arrive pas à s'y associer), puis le hotspot du
-   téléphone si les champs « secours » sont remplis.
+4. Activer le partage de connexion du téléphone (l'appli affiche un bouton vers les réglages tant qu'il
+   est éteint). Les points d'accès que l'appli peut ouvrir elle-même ont été essayés le 24/09 (hotspot
+   local Android en WPA2/WPA3 mixte, groupe Wi-Fi Direct en WPA2 2,4 GHz) : la Hero 12 les voit mais
+   n'arrive jamais à s'y associer, alors qu'elle rejoint le hotspot du téléphone sans problème.
 5. Saisir l'adresse du PC (nom DynDNS), port 9000, latence 12000 ms → **Démarrer**.
 
 ### 3. GoPro Hero 12
 
-**Pilotage automatique (recommandé)** : cocher « L'appli ouvre son propre hotspot… », résolution
-(1080) et débit max (8000, la caméra accepte 800 à 10 000), Démarrer.
+**Pilotage automatique (recommandé)** : cocher « L'appli connecte la GoPro… », nom et mot de passe
+du hotspot du téléphone, résolution (1080) et débit max (8000, la caméra accepte 800 à 10 000), Démarrer.
 La première fois : mettre la caméra en mode appairage (*Préférences → Connexions → Connecter un
 appareil → Application GoPro Quik*) et accepter la demande d'appairage Bluetooth sur le téléphone.
 Fermer Quik pendant ce temps (une seule appli peut tenir la caméra en Bluetooth). Ensuite l'appli

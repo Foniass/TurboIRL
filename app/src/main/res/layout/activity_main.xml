@@ -107,7 +107,7 @@
             android:id="@+id/goproEnabled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="L'appli ouvre son propre hotspot, y connecte la GoPro et lance le live toute seule" />
+            android:text="L'appli connecte la GoPro au hotspot du téléphone et lance le live toute seule" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -119,7 +119,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Secours : nom du hotspot du téléphone"
+                android:hint="Nom du hotspot du téléphone (SSID)"
                 android:importantForAutofill="no"
                 android:inputType="textNoSuggestions"
                 android:singleLine="true" />
@@ -129,7 +129,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Secours : mot de passe"
+                android:hint="Mot de passe du hotspot"
                 android:importantForAutofill="no"
                 android:inputType="textVisiblePassword"
                 android:singleLine="true" />
@@ -160,6 +160,13 @@
                 android:inputType="number"
                 android:singleLine="true" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/tethering"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:text="Partage de connexion éteint : ouvrir les réglages" />
 
         <TextView
             android:id="@+id/goproStatus"

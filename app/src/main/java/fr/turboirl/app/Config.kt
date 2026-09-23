@@ -11,7 +11,7 @@ data class Config(
     val outMaxHeight: Int,
     val audioKbps: Int,
     val goproEnabled: Boolean,
-    /** Fallback hotspot (the phone's own tethering) if the automatic one cannot be opened. */
+    /** The phone's own tethering hotspot, which the camera joins. */
     val goproSsid: String,
     val goproPassword: String,
     val goproResolution: Int,
