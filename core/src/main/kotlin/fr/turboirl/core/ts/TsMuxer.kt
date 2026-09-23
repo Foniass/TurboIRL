@@ -6,7 +6,8 @@ package fr.turboirl.core.ts
  * RTMP reader thread.
  */
 fun interface TsSink {
-    fun write(buf: ByteArray, off: Int, len: Int)
+    /** [audioOnly] batches carry no video (audio, clock, tables): they must survive when video is sacrificed. */
+    fun write(buf: ByteArray, off: Int, len: Int, audioOnly: Boolean)
 }
 
 /** Single program MPEG-TS muxer: one H.264 video stream, optionally one AAC (ADTS) audio stream. */
@@ -15,6 +16,7 @@ class TsMuxer(private val sink: TsSink) {
     private val batch = ByteArray(MAX_BATCH)
     private var batchLen = 0
     private var batchStartedNs = 0L
+    private var batchHasVideo = false
 
     private var hasAudio = false
     private var pmtVersion = 0
@@ -59,9 +61,10 @@ class TsMuxer(private val sink: TsSink) {
     /** [data] is one or more ADTS frames. */
     fun writeAudio(data: ByteArray, len: Int, pts: Long) {
         if (lastPsiNs == 0L) return // nothing decodable before the first PAT/PMT + keyframe
+        // Audio travels in its own batches so that the sender can drop video and keep the sound
+        if (batchHasVideo) flush()
         writePes(AUDIO_PID, 0xC0, data, len, pts, pts, NO_PCR, false)
-        // Normally flushed along with the next video frame; don't let audio rot if video stalls.
-        if (batchLen > 0 && System.nanoTime() - batchStartedNs > AUDIO_FLUSH_NS) flush()
+        flush()
     }
 
     /**
@@ -94,9 +97,10 @@ class TsMuxer(private val sink: TsSink) {
 
     fun flush() {
         if (batchLen > 0) {
-            sink.write(batch, 0, batchLen)
+            sink.write(batch, 0, batchLen, !batchHasVideo)
             bytesWritten += batchLen
             batchLen = 0
+            batchHasVideo = false
         }
     }
 
@@ -109,6 +113,7 @@ class TsMuxer(private val sink: TsSink) {
     }
 
     private fun writePes(pid: Int, streamId: Int, data: ByteArray, len: Int, pts: Long, dts: Long, pcr: Long, keyframe: Boolean) {
+        if (pid == VIDEO_PID) batchHasVideo = true
         val withDts = dts != pts
         val headerDataLen = if (withDts) 10 else 5
         val header = ByteArray(9 + headerDataLen)

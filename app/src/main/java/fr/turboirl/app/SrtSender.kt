@@ -28,6 +28,9 @@ class SrtSender(
         @Volatile var connected = false
         /** Send buffer is filling up: the uplink cannot keep up with the input. */
         @Volatile var congested = false
+        /** Send buffer close to overflowing: video is being held back, only audio goes out. */
+        @Volatile var critical = false
+        @Volatile var videoDroppedForAudio = 0L
         @Volatile var rttMs = 0.0
         @Volatile var sendRateMbps = 0.0
         @Volatile var bandwidthMbps = 0.0
@@ -45,6 +48,9 @@ class SrtSender(
     // Hysteresis on the SRT send buffer occupancy, relative to the latency budget
     private val congestOnMs = (latencyMs * congestOnFraction).toInt()
     private val congestOffMs = latencyMs / 5
+    // Beyond this SRT would soon drop the oldest packets blindly (audio included): drop video ourselves instead
+    private val criticalOnMs = latencyMs * 4 / 5
+    private val criticalOffMs = latencyMs / 2
 
     private val queue = ArrayBlockingQueue<ByteArray>(QUEUE_PACKETS)
     @Volatile private var running = false
@@ -62,8 +68,12 @@ class SrtSender(
         thread = null
     }
 
-    override fun write(buf: ByteArray, off: Int, len: Int) {
+    override fun write(buf: ByteArray, off: Int, len: Int, audioOnly: Boolean) {
         if (!stats.connected) return
+        if (stats.critical && !audioOnly) {
+            stats.videoDroppedForAudio++
+            return
+        }
         if (!queue.offer(buf.copyOfRange(off, off + len))) {
             queue.clear()
             stats.queueOverflows++
@@ -98,6 +108,7 @@ class SrtSender(
             } finally {
                 stats.connected = false
                 stats.congested = false
+                stats.critical = false
                 try {
                     socket?.close()
                 } catch (_: Exception) {
@@ -134,6 +145,13 @@ class SrtSender(
                 stats.dropped += s.pktSndDrop
                 if (s.msSndBuf >= congestOnMs) stats.congested = true
                 else if (s.msSndBuf <= congestOffMs) stats.congested = false
+                if (!stats.critical && s.msSndBuf >= criticalOnMs) {
+                    stats.critical = true
+                    logger.log("Tampon SRT à ${s.msSndBuf} ms : vidéo retenue, seul le son part")
+                } else if (stats.critical && s.msSndBuf <= criticalOffMs) {
+                    stats.critical = false
+                    logger.log("Tampon SRT redescendu à ${s.msSndBuf} ms : vidéo relâchée")
+                }
             }
         }
     }

@@ -241,6 +241,7 @@ class RelayService : Service() {
                             "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
                             "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
                             "saturations +${st.queueOverflows - lastOverflows}" +
+                            (if (snap.srt.critical) ", VIDÉO RETENUE (son seul)" else "") +
                             (if (snap.cameraLimitKbps > 0) ", frein caméra ${snap.cameraLimitKbps} kb/s" else "") +
                             (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.frameDivider > 1) " 1/${t.stats.frameDivider} cadence" else ""}, entrées ${t.stats.framesIn} décodées ${t.stats.framesDecoded} dessinées ${t.scalerFramesDrawn()} sorties ${t.stats.framesOut}, perdues ${t.stats.framesDropped})" } ?: "") +
                             (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")

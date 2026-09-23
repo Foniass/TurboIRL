@@ -9,7 +9,7 @@
 #>
 param(
     [int]$Port = 9000,
-    [int]$LatencyMs = 8000,
+    [int]$LatencyMs = 12000,
     [int]$ObsPort = 9001
 )
 

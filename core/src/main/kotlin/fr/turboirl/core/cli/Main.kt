@@ -42,12 +42,12 @@ fun main(args: Array<String>) {
     val sinks = ArrayList<TsSink>()
     file?.let { path ->
         val out = FileOutputStream(path)
-        sinks.add(TsSink { buf, off, len -> out.write(buf, off, len) })
+        sinks.add(TsSink { buf, off, len, _ -> out.write(buf, off, len) })
     }
     udp?.let { target ->
         val socket = DatagramSocket()
         val address = InetSocketAddress(target.substringBeforeLast(':'), target.substringAfterLast(':').toInt())
-        sinks.add(TsSink { buf, off, len -> socket.send(DatagramPacket(buf, off, len, address)) })
+        sinks.add(TsSink { buf, off, len, _ -> socket.send(DatagramPacket(buf, off, len, address)) })
     }
     require(sinks.isNotEmpty()) { "préciser --file et/ou --udp" }
 
@@ -58,7 +58,7 @@ fun main(args: Array<String>) {
         val t0 = System.currentTimeMillis();
         { (System.currentTimeMillis() - t0) % period < duration }
     } ?: { false }
-    val relay = FlvToTsRelay({ buf, off, len -> sinks.forEach { it.write(buf, off, len) } }, logger, congested)
+    val relay = FlvToTsRelay({ buf, off, len, a -> sinks.forEach { it.write(buf, off, len, a) } }, logger, congested)
     relay.trickleKeyframes = trickle
     val server = RtmpServer(port, relay, logger, if (limitKBps > 0) 64 * 1024 else 0)
     server.limiter.bytesPerSec = limitKBps * 1000
