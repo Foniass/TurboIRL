@@ -57,10 +57,12 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
    ```
 
    Il écoute le SRT, enregistre chaque session dans `dumps/` et renvoie le flux à OBS en trois étages
-   (`tools/obs-pipeline.ps1`, partagé avec la relecture ; nécessite python 3) : ffmpeg décode, `tools/repeater.py`
-   ressort la dernière image à 30 i/s et le son sur l'horloge murale (silence si le son manque), ffmpeg
-   encode vers OBS. Le répéteur et l'encodeur ne redémarrent jamais : OBS ne voit jamais de trou, même
-   quand le téléphone se reconnecte.
+   (`tools/receiver.py`, nécessite python 3) : ffmpeg décode et imprime le PTS de chaque image et de chaque
+   bloc audio, le répéteur joue le son sur l'horloge murale (réserve 700 ms, silence si le son manque) et y
+   asservit l'image (dernière image dont le PTS est atteint par le son joué, répétée si l'image manque), ffmpeg
+   encode vers OBS. L'encodeur ne redémarre jamais : OBS ne voit jamais de trou, même quand le téléphone se
+   reconnecte, et son et image ne peuvent pas se désaligner. `tools/obs.py` pilote l'enregistrement OBS
+   (obs-websocket, activé dans Outils → Paramètres du serveur WebSocket, sans authentification).
    Pour rejouer un dump vers OBS exactement comme en direct (reproduire un incident, valider une
    correction du récepteur sans sortie terrain ; nécessite python 3) :
 
@@ -145,7 +147,10 @@ La source multimédia d'OBS retient le son tant qu'elle ne reçoit pas d'image p
 peut pas dupliquer une image *avant* d'avoir reçu la suivante (en plus, son muxeur retenait le son jusqu'à
 10 s sans `-max_interleave_delta`, et le décodeur HEVC multi-thread ajoutait 3 s de retard à 5 i/s).
 D'où le répéteur sur horloge murale : validé en relecture (`tools/replay.ps1`), OBS enregistre le son sans
-coupure pendant l'image figée, là où l'ancien récepteur donnait 5,9 s de silence.
+coupure pendant l'image figée, là où l'ancien récepteur donnait 5,9 s de silence. Deuxième piège : le
+téléphone (≤ 0.99) met 16 trames AAC dans chaque PES audio, le décodeur livre donc son et image par rafales de
+340 ms ; sans les PTS (filtres metadata avec `direct=1`, conversion de cadence par le filtre `fps` avant
+l'impression) l'image répétée tombait à 5 i/s ou se décalait du son.
 
 ## Limites connues
 
