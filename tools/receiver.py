@@ -8,7 +8,8 @@ test du 23/09 18h20 alors que le son arrivait en continu). Ici :
     48 kHz sur deux sockets TCP locaux, plus le PTS de chaque image et de chaque bloc audio sur stdout
     via les filtres metadata/ametadata ; il écrit aussi le dump brut ;
   - le répéteur (ce script) joue le son sur l'horloge murale (file de 700 ms, silence si vide) et y asservit
-    l'image : à chaque tick il montre la dernière image dont le PTS est atteint par le contenu audio joué ;
+    l'image : à chaque tick il montre la dernière image dont le PTS est atteint par le contenu audio joué
+    (PTS de l'image k = ancre de la session + k/30, le filtre fps garantissant la cadence constante) ;
     file vide → image répétée, image en retard → rattrapée sans être montrée. Son et image ne peuvent pas se
     désaligner, quelle que soit la façon dont le décodeur les livre (rafales de 340 ms, image clé tardive) ;
   - l'encodeur ffmpeg (jamais relancé) lit ce flux régulier et l'envoie à OBS, qui ne voit jamais de trou.
@@ -68,14 +69,22 @@ class Receiver:
         self.session = 0               # numéro de session de décodeur
         self.audio_session_first_pts = {}
         self.ticks = 0
-        # image : file (session, pts_time, image) ; PTS reçus par stdout du décodeur, appariés par rang
+        # image : file (session, pts_time, image). Le filtre fps du décodeur sort une cadence strictement constante,
+        # donc PTS(image k) = ancre + k/fps : l'image k reçoit son PTS par comptage, sans dépendre de l'arrivée des
+        # lignes (les images brutes peuvent arriver 0,5 s après leurs lignes quand le décodeur rattrape un trou).
+        # Les lignes de PTS (stdout) servent à poser l'ancre et à détecter une discontinuité (filtre réinitialisé).
         self.frames = deque()
-        self.frame_pts_pending = deque()   # PTS reçus avant les images correspondantes
-        self.frames_without_pts = deque()  # images reçues avant leur PTS
+        self.video_anchor = {}             # session → (pts de la première ligne, index de ligne correspondant)
+        self.video_line_index = {}         # session → nombre de lignes src=v lues
+        self.video_frame_index = {}        # session → nombre d'images brutes reçues
+        self.frames_unanchored = deque()   # images reçues avant la première ligne de la session
+        self.line_times = deque()          # (index de ligne, heure) pour mesurer le retard des images sur les lignes
+        self.frame_line_lag = 0.0
         self.latest = bytes([16]) * (self.w * self.h) + bytes([128]) * (self.w * self.h // 2)
         self.frames_in = self.frames_out = self.repeated = self.distinct = self.late = self.skipped = 0
         self.silence_chunks = self.skipped_audio = 0
         self.sync_worst = 0.0
+        self.pts_lines = 0  # lignes « src=v » lues (doit suivre frames_in ; sinon l'appariement par rang dérive)
         self.decoder_connected = False
         self.fifo_min, self.fifo_max = 1 << 30, 0
         self.fq_min, self.fq_max = 1 << 30, 0
@@ -99,10 +108,12 @@ class Receiver:
             # doublons/suppressions se feraient après les filtres et les lignes ne correspondraient plus aux images)
             "-map", "0:v:0", "-fps_mode", "passthrough",
             "-vf", f"scale={self.w}:{self.h},format=yuv420p,fps={self.fps},metadata=mode=add:key=src:value=v,metadata=mode=print:file=-:direct=1",
-            "-flush_packets", "1", "-f", "rawvideo", f"tcp://127.0.0.1:{a.in_video}",
+            # -thread_queue_size 1 (sortie) : la file de muxage de ffmpeg, une fois remplie par la rafale de doublons qui
+            # suit un trou vidéo, restait pleine (16 images = 0,5 s de retard permanent des images sur leurs PTS)
+            "-thread_queue_size", "1", "-flush_packets", "1", "-f", "rawvideo", f"tcp://127.0.0.1:{a.in_video}",
             # PCM 48 kHz stéréo continu (aresample=async comble/rogne les sauts d'horodatage)
             "-map", "0:a:0", "-af", "aresample=async=1000,ametadata=mode=add:key=src:value=a,ametadata=mode=print:file=-:direct=1",
-            "-flush_packets", "1", "-f", "s16le", "-ar", str(self.rate), "-ac", str(self.channels),
+            "-thread_queue_size", "1", "-flush_packets", "1", "-f", "s16le", "-ar", str(self.rate), "-ac", str(self.channels),
             f"tcp://127.0.0.1:{a.in_audio}",
         ]
         if dump:
@@ -149,12 +160,26 @@ class Receiver:
             if pending is None:
                 continue
             if line.startswith(b"src=v"):
+                self.pts_lines += 1
                 with self.lock:
-                    if self.frames_without_pts:
-                        s, data = self.frames_without_pts.popleft()
-                        self.frames.append((s, pending, data))
+                    k = self.video_line_index.get(session, 0)
+                    self.video_line_index[session] = k + 1
+                    self.line_times.append((k, time.perf_counter()))
+                    if len(self.line_times) > 600:
+                        self.line_times.popleft()
+                    anchor = self.video_anchor.get(session)
+                    if anchor is None:
+                        self.video_anchor[session] = (pending, k)
+                        # images arrivées avant la première ligne : elles précèdent l'ancre
+                        while self.frames_unanchored:
+                            fs, idx, data = self.frames_unanchored.popleft()
+                            if fs == session:
+                                self.frames.append((fs, pending + (idx - k) / self.fps, data))
                     else:
-                        self.frame_pts_pending.append((session, pending))
+                        expected = anchor[0] + (k - anchor[1]) / self.fps
+                        if abs(pending - expected) > 0.6 / self.fps:
+                            log(f"session {session} : discontinuité vidéo de {pending - expected:+.3f} s à la ligne {k}, ancre recalée")
+                            self.video_anchor[session] = (pending, k)
             elif line.startswith(b"src=a"):
                 if session not in self.audio_session_first_pts:
                     self.audio_session_first_pts[session] = pending
@@ -176,10 +201,10 @@ class Receiver:
             session = self.session
             self.decoder_connected = True
             with self.lock:
-                # nouvelle session : on repart propre côté image
+                # nouvelle session : on repart propre côté image (l'ancre et les index de la session arrivent avec elle)
                 self.frames.clear()
-                self.frames_without_pts.clear()
-                self.frame_pts_pending = deque(p for p in self.frame_pts_pending if p[0] == session)
+                self.frames_unanchored.clear()
+                self.line_times.clear()
             log(f"session {session} : décodeur connecté (vidéo {self.w}x{self.h})")
             buf = bytearray(self.frame_bytes)
             view = memoryview(buf)
@@ -193,11 +218,17 @@ class Receiver:
                         got += n
                     data = bytes(buf)
                     with self.lock:
-                        if self.frame_pts_pending:
-                            s, pts = self.frame_pts_pending.popleft()
-                            self.frames.append((s, pts, data))
+                        idx = self.video_frame_index.get(session, 0)
+                        self.video_frame_index[session] = idx + 1
+                        anchor = self.video_anchor.get(session)
+                        if anchor is None:
+                            self.frames_unanchored.append((session, idx, data))
                         else:
-                            self.frames_without_pts.append((session, data))
+                            self.frames.append((session, anchor[0] + (idx - anchor[1]) / self.fps, data))
+                        for li, lt in self.line_times:
+                            if li == idx:
+                                self.frame_line_lag = max(self.frame_line_lag, time.perf_counter() - lt)
+                                break
                         if len(self.frames) > self.fps * 6:
                             self.frames.popleft()  # garde-fou mémoire (décodeur très en avance sur le son : anormal)
                             self.skipped += 1
@@ -432,6 +463,8 @@ class Receiver:
                 ms = 1000 / self.bps / self.rate
                 fifo = f"{self.fifo_min * ms:.0f}-{self.fifo_max * ms:.0f} ms" if self.fifo_max else "vide"
                 fq = f"{self.fq_min}-{self.fq_max}"
+                unpaired = f"lignes PTS {self.pts_lines} / images {self.frames_in}, image après sa ligne au pire {self.frame_line_lag * 1000:.0f} ms"
+                self.frame_line_lag = 0.0
                 self.fifo_min, self.fifo_max = 1 << 30, 0
                 self.fq_min, self.fq_max = 1 << 30, 0
                 worst = self.sync_worst
@@ -439,7 +472,7 @@ class Receiver:
             log(
                 f"10 s : images reçues {d[0]}, envoyées {d[1]} (répétées {d[2]}, en retard {d[4]}, sautées {d[5]}), "
                 f"file image {fq}, file son {fifo}, silence inséré {d[3] * 20} ms, "
-                f"son sauté {self.skipped_audio * ms:.0f} ms au total, image en retard sur le son au pire {worst * 1000:.0f} ms, "
+                f"son sauté {self.skipped_audio * ms:.0f} ms au total, image en retard sur le son au pire {worst * 1000:.0f} ms, {unpaired}, "
                 f"décodeur {'connecté' if self.decoder_connected else 'absent'}"
             )
 
