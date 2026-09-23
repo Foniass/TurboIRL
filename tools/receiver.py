@@ -106,7 +106,10 @@ class Receiver:
             f"tcp://127.0.0.1:{a.in_audio}",
         ]
         if dump:
-            args += ["-map", "0", "-c", "copy", "-max_interleave_delta", "200000", "-f", "mpegts", dump]
+            # -pes_payload_size 0 : un PES par trame audio comme sur le fil (par défaut ffmpeg en regroupe 16, et la
+            # relecture du dump livrait alors le son par rafales de 340 ms qui n'existent pas en direct)
+            args += ["-map", "0", "-c", "copy", "-max_interleave_delta", "200000", "-pes_payload_size", "0",
+                     "-f", "mpegts", dump]
         return args
 
     def run_decoder_sessions(self):

@@ -147,10 +147,11 @@ La source multimédia d'OBS retient le son tant qu'elle ne reçoit pas d'image p
 peut pas dupliquer une image *avant* d'avoir reçu la suivante (en plus, son muxeur retenait le son jusqu'à
 10 s sans `-max_interleave_delta`, et le décodeur HEVC multi-thread ajoutait 3 s de retard à 5 i/s).
 D'où le répéteur sur horloge murale : validé en relecture (`tools/replay.ps1`), OBS enregistre le son sans
-coupure pendant l'image figée, là où l'ancien récepteur donnait 5,9 s de silence. Deuxième piège : le
-téléphone (≤ 0.99) met 16 trames AAC dans chaque PES audio, le décodeur livre donc son et image par rafales de
-340 ms ; sans les PTS (filtres metadata avec `direct=1`, conversion de cadence par le filtre `fps` avant
-l'impression) l'image répétée tombait à 5 i/s ou se décalait du son.
+coupure pendant l'image figée, là où l'ancien récepteur donnait 5,9 s de silence. Deuxième piège : en relecture
+d'un dump, le son arrivait par rafales de 340 ms — le remuxage ffmpeg du dump regroupe 16 trames AAC par PES
+(le téléphone, lui, écrit un PES par trame ; le dump est désormais écrit avec `-pes_payload_size 0`). Sans les
+PTS (filtres metadata avec `direct=1`, conversion de cadence par le filtre `fps` avant l'impression) l'image
+répétée tombait à 5 i/s ou se décalait du son.
 
 ## Limites connues
 

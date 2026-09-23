@@ -131,8 +131,11 @@ class AdaptiveBitrate(
                 outSamples.addLast(now to transcoder.stats.bytesOut)
                 while (outSamples.size > 1 && now - outSamples.first().first > 5000) outSamples.removeFirst()
                 val oldest = outSamples.first()
-                // 5 s window (keyframes every 2 s would fool a shorter one), gentle steps, quick recovery
-                if (!suspended && now - lastTargetChange >= 3000 && now - oldest.first >= 4000) {
+                // 5 s window (keyframes every 2 s would fool a shorter one), gentle steps, quick recovery.
+                // Not at the floor: there the encoder cannot go lower anyway (~590 kb/s for 400 requested on the
+                // MTK HEVC encoder) and a correction learnt there would then starve the 3500 kb/s target (×0.73
+                // for 40 s after each recovery on the 23/09 test).
+                if (!suspended && target > minKbps && now - lastTargetChange >= 3000 && now - oldest.first >= 4000) {
                     val measuredKbps = ((transcoder.stats.bytesOut - oldest.second) * 8 / (now - oldest.first)).toInt()
                     val requested = (target * correction).toInt()
                     if (measuredKbps > requested * 13 / 10 && measuredKbps > minKbps) {

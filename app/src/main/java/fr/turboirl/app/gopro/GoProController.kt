@@ -93,6 +93,7 @@ class GoProController(
     private fun loop() {
         ble.listener = GoProBle.Listener(::onNotification)
         var failures = 0
+        var hotspotMisses = 0
         try {
             while (running) {
                 try {
@@ -100,6 +101,7 @@ class GoProController(
                     initCamera()
                     joinHotspot()
                     failures = 0
+                    hotspotMisses = 0
                     runLiveStream() // returns when the stream needs to be set up again
                 } catch (e: InterruptedException) {
                     break
@@ -110,6 +112,11 @@ class GoProController(
                     if (ble.connected) {
                         // The camera is still with us (hotspot not visible yet, live refused…): just try again.
                         logger.log("GoPro : $msg — nouvel essai dans 5 s")
+                        if (msg.contains("non vu par la caméra") && ++hotspotMisses == 4) {
+                            // 23/09 : 2 min sans voir le hotspot au départ, puis visible d'un coup — HyperOS coupe
+                            // le point d'accès tout seul après 10 min sans client si l'option est active
+                            logger.log("GoPro : le hotspot est invisible depuis 20 s — vérifier qu'il est allumé et désactiver « Désactiver automatiquement le point d'accès » dans les réglages du téléphone")
+                        }
                         Thread.sleep(5000)
                     } else {
                         failures++

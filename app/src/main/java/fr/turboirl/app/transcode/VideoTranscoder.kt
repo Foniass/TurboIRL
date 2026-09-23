@@ -72,6 +72,11 @@ class VideoTranscoder(
 
     private val pending = ArrayDeque<Frame>()
     private val freeInputs = ArrayDeque<Int>()
+    // Decoded pictures waiting to be handed to the scaler, one at a time: the SurfaceTexture keeps only the
+    // newest queued buffer, so releasing two before the GL thread took the first silently lost the older one
+    // (7-13 % of the frames on the Redmi, whose decoder outputs in bursts).
+    private val decodedOut = ArrayDeque<Int>()
+    private var inFlightSinceNs = 0L
     private var awaitingKeyframe = true
     private var failures = 0
     private var encoderVps: ByteArray? = null
@@ -188,6 +193,7 @@ class VideoTranscoder(
         try {
             val sc = scaler ?: GlScaler(logger).also { scaler = it }
             sc.frameDivider = stats.frameDivider
+            sc.onFrameConsumed = { handler.post { inFlightSinceNs = 0L; pumpDecoded() } }
             createEncoder()
 
             val dec = MediaCodec.createDecoderByType(MIME)
@@ -309,6 +315,30 @@ class VideoTranscoder(
         releaseEncoder()
         pending.clear()
         freeInputs.clear()
+        decodedOut.clear() // indices of the codec just released
+        inFlightSinceNs = 0L
+    }
+
+    /** Hands the next decoded picture to the scaler once the previous one has been taken (handler thread). */
+    private fun pumpDecoded() {
+        val dec = decoder ?: return
+        val now = System.nanoTime()
+        if (inFlightSinceNs != 0L) {
+            if (now - inFlightSinceNs < IN_FLIGHT_TIMEOUT_NS) return
+            inFlightSinceNs = 0L // the GL thread never told us: don't stall forever
+        }
+        if (decodedOut.isEmpty()) return
+        try {
+            // GL thread too slow: keep the picture fresh rather than pile up latency
+            while (decodedOut.size > MAX_DECODED_QUEUE) {
+                dec.releaseOutputBuffer(decodedOut.removeFirst(), false)
+                stats.framesDropped++
+            }
+            inFlightSinceNs = now
+            dec.releaseOutputBuffer(decodedOut.removeFirst(), true)
+        } catch (e: Exception) {
+            onCodecError("décodeur", e)
+        }
     }
 
     private fun feedDecoder() {
@@ -364,12 +394,17 @@ class VideoTranscoder(
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (codec !== decoder) return
-            if (info.size > 0) stats.framesDecoded++
-            try {
-                codec.releaseOutputBuffer(index, info.size > 0)
-            } catch (e: Exception) {
-                onCodecError("décodeur", e)
+            if (info.size <= 0) {
+                try {
+                    codec.releaseOutputBuffer(index, false)
+                } catch (e: Exception) {
+                    onCodecError("décodeur", e)
+                }
+                return
             }
+            stats.framesDecoded++
+            decodedOut.addLast(index)
+            pumpDecoded()
         }
 
         override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
@@ -474,6 +509,8 @@ class VideoTranscoder(
         private const val MIME = MediaFormat.MIMETYPE_VIDEO_AVC
         private const val MIME_HEVC = MediaFormat.MIMETYPE_VIDEO_HEVC
         private const val MAX_PENDING = 60
+        private const val MAX_DECODED_QUEUE = 3
+        private const val IN_FLIGHT_TIMEOUT_NS = 200_000_000L
         private const val MAX_FAILURES = 3
         private const val GOP_SECONDS = 2
         private val START_CODE = byteArrayOf(0, 0, 0, 1)

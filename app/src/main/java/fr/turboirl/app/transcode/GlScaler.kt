@@ -64,6 +64,13 @@ class GlScaler(private val logger: Logger) {
     /** Time spent inside eglSwapBuffers, i.e. waiting for the encoder, in ms. */
     @Volatile var swapWaitMs = 0L
         private set
+
+    /**
+     * Called (GL thread) each time a frame has been taken from the SurfaceTexture, i.e. the decoder may
+     * hand over the next one. The BufferQueue behind a SurfaceTexture keeps only the newest queued buffer:
+     * two frames released before we get here and the older one is silently lost (7-13 % on the Redmi).
+     */
+    @Volatile var onFrameConsumed: (() -> Unit)? = null
     private var lastTimestamp = -1L
 
     init {
@@ -178,6 +185,7 @@ class GlScaler(private val logger: Logger) {
             lastTimestamp = ts
             framesReceived++
         }
+        onFrameConsumed?.invoke()
         frameCount++
         val divider = frameDivider.coerceAtLeast(1)
         if (window == EGL14.EGL_NO_SURFACE || frameCount % divider != 0L) return
