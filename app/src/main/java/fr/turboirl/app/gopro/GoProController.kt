@@ -54,6 +54,7 @@ class GoProController(
         private set
 
     @Volatile var cameraBitrateKbps = 0
+        private set
     private var capabilitiesLogged = false
 
     /** proto2 repeated enums may arrive packed (one length-delimited blob of varints). */
@@ -74,7 +75,6 @@ class GoProController(
         }
         return out
     }
-        private set
 
     private val ble = GoProBle(context, logger)
 
@@ -485,6 +485,7 @@ class GoProController(
     }
 
     private companion object {
+        private val WINDOW_LABELS = mapOf(4 to "480p", 7 to "720p", 12 to "1080p") // EnumWindowSize
         const val CMD_SET_SHUTTER = 0x01
         const val CMD_SET_DATE_TIME = 0x0D
         const val CMD_GET_HW_INFO = 0x3C

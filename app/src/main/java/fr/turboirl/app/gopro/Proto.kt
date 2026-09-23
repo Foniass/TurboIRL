@@ -48,6 +48,7 @@ object Proto {
         fun int(field: Int): Int? = long(field)?.toInt()
         fun bool(field: Int): Boolean? = long(field)?.let { it != 0L }
         fun string(field: Int): String? = (fields[field]?.firstOrNull() as? ByteArray)?.toString(Charsets.UTF_8)
+        fun bytes(field: Int): ByteArray? = fields[field]?.firstOrNull() as? ByteArray
         fun messages(field: Int): List<Message> = fields[field].orEmpty().filterIsInstance<ByteArray>().map { decode(it) }
         fun longs(field: Int): List<Long> = fields[field].orEmpty().filterIsInstance<Long>()
         override fun toString(): String = fields.entries.joinToString(", ") { (k, v) ->
