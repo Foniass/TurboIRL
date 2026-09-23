@@ -23,6 +23,8 @@ data class Config(
     val goproAddress: String,
     val goproName: String,
     val goproRecord: Boolean,
+    /** With goproRecord: ask the camera for a 9:16 1080p 60 fps copy (vertical, for TikTok) before starting the live. */
+    val goproSdVertical: Boolean,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -47,6 +49,7 @@ data class Config(
             .putString("goproAddress", goproAddress)
             .putString("goproName", goproName)
             .putBoolean("goproRecord", goproRecord)
+            .putBoolean("goproSdVertical", goproSdVertical)
             .apply()
     }
 
@@ -78,6 +81,7 @@ data class Config(
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
                 goproName = p.getString("goproName", "").orEmpty(),
                 goproRecord = p.getBoolean("goproRecord", false),
+                goproSdVertical = p.getBoolean("goproSdVertical", false),
             )
         }
     }

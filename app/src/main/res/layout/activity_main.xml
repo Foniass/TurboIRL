@@ -200,6 +200,12 @@
             android:layout_height="wrap_content"
             android:text="Enregistrer aussi sur la carte SD de la GoPro (chauffe, ~9 Go/h)" />
 
+        <CheckBox
+            android:id="@+id/goproSdVertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Copie SD en 9:16 1080p 60 i/s (vertical, TikTok) — le live reste en 16:9 30 i/s" />
+
         <TextView
             android:id="@+id/goproStatus"
             android:layout_width="match_parent"

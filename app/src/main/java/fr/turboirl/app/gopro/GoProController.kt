@@ -29,6 +29,8 @@ class GoProController(
         val knownAddress: String?,
         /** Also save a copy on the SD card while streaming (more heat, ~9 GB/h). */
         val recordLocally: Boolean = false,
+        /** Before the live: ask for a 9:16 1080p 60 fps video preset, hoping the SD copy follows it. */
+        val sdVertical: Boolean = false,
     )
 
     enum class State(val label: String) {
@@ -278,6 +280,38 @@ class GoProController(
         logger.log("GoPro : connectée au hotspot")
     }
 
+    /**
+     * Experimental (24/09): tries to put the camera's video preset in 9:16 1080p 60 fps before the live so that
+     * the SD copy comes out vertical while the stream stays 16:9 30 fps. Whether the camera honours this in live
+     * mode is exactly what the test must tell: every answer is logged (0 = accepted), nothing is fatal.
+     */
+    private fun applyVerticalPreset() {
+        val steps = listOf(
+            Triple(SETTING_ASPECT_RATIO, 4, "format 9:16"),
+            Triple(SETTING_RESOLUTION, 9, "résolution 1080"),
+            Triple(SETTING_FPS, 5, "60 i/s"),
+        )
+        for ((id, value, label) in steps) {
+            val status = try {
+                ble.setSetting(id, value)
+            } catch (e: GoProBle.BleException) {
+                logger.log("GoPro : réglage $label ($id=$value) sans réponse (${e.message})")
+                continue
+            }
+            if (status == 0) {
+                logger.log("GoPro : réglage $label accepté")
+            } else {
+                logger.log("GoPro : réglage $label ($id=$value) refusé (code $status)")
+                if (id == SETTING_ASPECT_RATIO) {
+                    // Newer firmwares expose 9:16 as a resolution instead (1080 9:16 = 110)
+                    val alt = try { ble.setSetting(SETTING_RESOLUTION, 110) } catch (e: GoProBle.BleException) { -1 }
+                    logger.log("GoPro : résolution 1080 9:16 (2=110) ${if (alt == 0) "acceptée" else "refusée (code $alt)"}")
+                    if (alt == 0) break
+                }
+            }
+        }
+    }
+
     /** Configures and starts the live stream, then watches it. Returns when it must be redone. */
     private fun runLiveStream() {
         val url = waitForUrl()
@@ -286,6 +320,7 @@ class GoProController(
             ble.command(CMD_SET_SHUTTER, byteArrayOf(1, 0))
         } catch (_: GoProBle.BleException) {
         }
+        if (settings.recordLocally && settings.sdVertical) applyVerticalPreset()
         val window = when (settings.resolution) {
             480 -> 4L
             1080 -> 12L
@@ -491,6 +526,9 @@ class GoProController(
         const val CMD_GET_HW_INFO = 0x3C
         const val CMD_THIRD_PARTY_CLIENT_INFO = 0x50
         const val SETTING_LED = 91
+        const val SETTING_RESOLUTION = 2  // 9 = 1080, 1 = 4K, 110 = 1080 9:16 (newer firmwares)
+        const val SETTING_FPS = 3         // 5 = 60, 8 = 30
+        const val SETTING_ASPECT_RATIO = 108 // 1 = 16:9, 3 = 8:7, 4 = 9:16
 
         const val ACT_SET_PAIRING_STATE = 0x01
         const val ACT_SET_PAIRING_STATE_RSP = 0x81
