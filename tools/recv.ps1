@@ -17,6 +17,7 @@ param(
 Start-Transcript -Path (Join-Path $PSScriptRoot "..\dumps\recv-$(Get-Date -Format yyyyMMdd-HHmmss).log") -Append | Out-Null
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "obs-pipeline.ps1")
 $dumps = Join-Path $PSScriptRoot "..\dumps"
 New-Item -ItemType Directory -Force $dumps | Out-Null
 
@@ -35,15 +36,11 @@ while ($true) {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $dump = Join-Path $dumps "dump-$stamp.ts"
     Write-Host "`n[$(Get-Date -Format HH:mm:ss)] Attente du téléphone... (dump : $dump)"
-    # Vers OBS : réencodage en cadence constante. Quand le flux du téléphone s'interrompt (zone morte,
-    # caméra qui redémarre), ffmpeg répète la dernière image et comble le son par du silence : OBS ne
-    # voit jamais de trou dans la ligne de temps (sinon il hache le son jusqu'au redémarrage de la source).
+    # Vers OBS : réencodage en cadence constante (pipeline partagé avec replay.ps1, voir obs-pipeline.ps1).
     # Le dump reste une copie brute du flux reçu.
     & ffmpeg -hide_banner -loglevel warning -stats -stats_period 5 `
-        -fflags +genpts -analyzeduration 2000000 -probesize 1000000 -dts_delta_threshold 1000 `
-        -i $src `
-        -map 0 -fps_mode cfr -r 30 -c:v libx264 -preset faster -tune zerolatency -g 60 -b:v 10M -maxrate 10M -bufsize 10M -pix_fmt yuv420p `
-        -af "aresample=async=1000" -c:a aac -b:a 160k -f mpegts "udp://127.0.0.1:${ObsPort}?pkt_size=1316" `
+        @InputArgs -i $src `
+        @(ObsOutputArgs $ObsPort) `
         -map 0 -c copy -max_interleave_delta 200000 -f mpegts $dump
     if ((Test-Path $dump) -and (Get-Item $dump).Length -lt 100000) { Remove-Item $dump }  # connexion sans flux
     Write-Host "[$(Get-Date -Format HH:mm:ss)] Téléphone déconnecté, redémarrage dans 1 s"

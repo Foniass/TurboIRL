@@ -56,7 +56,14 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
    powershell -ExecutionPolicy Bypass -File tools/recv.ps1
    ```
 
-   Il écoute le SRT, enregistre chaque session dans `dumps/` et renvoie le flux à OBS.
+   Il écoute le SRT, enregistre chaque session dans `dumps/` et renvoie le flux à OBS
+   (pipeline ffmpeg dans `tools/obs-pipeline.ps1`, partagé avec la relecture).
+   Pour rejouer un dump vers OBS exactement comme en direct (reproduire un incident, valider une
+   correction du récepteur sans sortie terrain ; nécessite python 3) :
+
+   ```bash
+   powershell -ExecutionPolicy Bypass -File tools/replay.ps1 -Dump dumps/dump-20260923-181204.ts -StartSec 440 -DurationSec 60
+   ```
 3. OBS : Source → **Source multimédia**, décocher « Fichier local », entrée `udp://127.0.0.1:9001`,
    format d'entrée `mpegts`. (Sans le script : `srt://0.0.0.0:9000?mode=listener&latency=2000000`
    directement dans OBS, mais plus de dump.)
@@ -128,6 +135,13 @@ son dans OBS, `--trickle` non). L'appli ne laisse donc jamais de trou vidéo : m
 désactiver/réactiver la source le remet d'aplomb. En plus, `tools/recv.ps1` réencode le flux vers OBS en
 cadence constante (dernière image répétée, silence inséré) : même une coupure totale du réseau ou un
 redémarrage de la caméra ne crée pas de trou côté OBS (vérifié : test A haché, test C propre).
+
+Deux pièges ffmpeg trouvés sur le test du 23/09 (18h20), corrigés dans `obs-pipeline.ps1` :
+le muxeur mpegts retient le son jusqu'à 10 s en attendant la vidéo (`-max_interleave_delta` obligatoire
+sur la sortie OBS, sinon un trou vidéo de 8 s devient 8 s de silence alors que le dump a le son en
+continu), et le décodeur HEVC multi-thread garde ~16 images en attente, soit 3 s de retard à 5 i/s
+(`-threads 1`). Vérifié en relecture du dump : son en temps réel pendant tout le trou, trou vidéo
+en sortie égal au trou source, rafale d'images dupliquées de 1,9 Mo au retour de la vidéo.
 
 ## Limites connues
 
