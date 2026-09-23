@@ -27,6 +27,16 @@ class TsMuxer(private val sink: TsSink) {
     var bytesWritten = 0L
         private set
 
+    /** MPEG-TS stream type of the video: 0x1B = H.264, 0x24 = H.265. Changing it re-announces the PMT. */
+    var videoStreamType = STREAM_TYPE_H264
+        set(value) {
+            if (value != field) {
+                field = value
+                pmtVersion = (pmtVersion + 1) and 0x1F
+                lastPsiNs = 0
+            }
+        }
+
     fun setHasAudio(value: Boolean) {
         if (value != hasAudio) {
             hasAudio = value
@@ -194,7 +204,7 @@ class TsMuxer(private val sink: TsSink) {
         pmt[9] = VIDEO_PID.toByte()
         pmt[10] = 0xF0.toByte()
         var p = 12
-        p = putStream(pmt, p, 0x1B, VIDEO_PID)
+        p = putStream(pmt, p, videoStreamType, VIDEO_PID)
         if (hasAudio) putStream(pmt, p, 0x0F, AUDIO_PID)
         pmtCc = (pmtCc + 1) and 0xF
         writeSection(PMT_PID, pmtCc, pmt)
@@ -244,6 +254,8 @@ class TsMuxer(private val sink: TsSink) {
     // 464XLAT + CGNAT of mobile carriers, where 7 packets (1316 B) may be silently dropped.
     const val MAX_BATCH = 6 * TS_PACKET
         const val NO_PCR = -1L
+        const val STREAM_TYPE_H264 = 0x1B
+        const val STREAM_TYPE_H265 = 0x24
 
         private const val PAT_PID = 0
         private const val PMT_PID = 0x1000

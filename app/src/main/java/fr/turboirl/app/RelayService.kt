@@ -104,7 +104,7 @@ class RelayService : Service() {
         val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)
         if (config.transcode) {
             val minKbps = 400
-            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight)
+            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight, config.hevc)
             flvRelay.processor = tc
             flvRelay.growingHold = false
             transcoder = tc
@@ -115,7 +115,7 @@ class RelayService : Service() {
                 audioTranscoder = at
             }
             abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, audioKbps * 13 / 10 + 40, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
-            logger.log("Réencodage activé : vidéo ${minKbps}-${config.outMaxKbps} kb/s jusqu'à ${config.outMaxHeight}p" + (if (config.audioTranscode) ", son ${config.audioKbps} kb/s" else ", son d'origine"))
+            logger.log("Réencodage activé : vidéo ${minKbps}-${config.outMaxKbps} kb/s jusqu'à ${config.outMaxHeight}p" + (if (config.hevc) " en H.265" else " en H.264") + (if (config.audioTranscode) ", son ${config.audioKbps} kb/s" else ", son d'origine"))
         }
         try {
             server.start()

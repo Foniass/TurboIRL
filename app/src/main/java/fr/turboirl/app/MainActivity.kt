@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var transcode: CheckBox
     private lateinit var outMaxKbps: EditText
     private lateinit var outMaxHeight: EditText
+    private lateinit var hevc: CheckBox
     private lateinit var audioTranscode: CheckBox
     private lateinit var audioKbps: EditText
     private lateinit var goproEnabled: CheckBox
@@ -62,6 +63,7 @@ class MainActivity : Activity() {
         transcode = findViewById(R.id.transcode)
         outMaxKbps = findViewById(R.id.outMaxKbps)
         outMaxHeight = findViewById(R.id.outMaxHeight)
+        hevc = findViewById(R.id.hevc)
         audioTranscode = findViewById(R.id.audioTranscode)
         audioKbps = findViewById(R.id.audioKbps)
         goproEnabled = findViewById(R.id.goproEnabled)
@@ -84,6 +86,7 @@ class MainActivity : Activity() {
         transcode.isChecked = config.transcode
         outMaxKbps.setText(config.outMaxKbps.toString())
         outMaxHeight.setText(config.outMaxHeight.toString())
+        hevc.isChecked = config.hevc
         audioTranscode.isChecked = config.audioTranscode
         audioKbps.setText(config.audioKbps.toString())
         goproEnabled.isChecked = config.goproEnabled
@@ -161,6 +164,7 @@ class MainActivity : Activity() {
             transcode = transcode.isChecked,
             outMaxKbps = outMax ?: 3000,
             outMaxHeight = outH ?: 720,
+            hevc = hevc.isChecked,
             audioTranscode = audioTranscode.isChecked,
             audioKbps = aKbps ?: 64,
             goproEnabled = goproOn,
@@ -184,6 +188,7 @@ class MainActivity : Activity() {
         goproRecord.isEnabled = !running
         adaptive.isEnabled = !running
         transcode.isEnabled = !running
+        hevc.isEnabled = !running
         audioTranscode.isEnabled = !running
         val gp = service?.snapshot?.gopro
         goproStatus.text = when {

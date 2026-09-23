@@ -12,6 +12,7 @@ data class Config(
     val transcode: Boolean,
     val outMaxKbps: Int,
     val outMaxHeight: Int,
+    val hevc: Boolean,
     val audioTranscode: Boolean,
     val audioKbps: Int,
     val goproEnabled: Boolean,
@@ -35,6 +36,7 @@ data class Config(
             .putBoolean("transcode", transcode)
             .putInt("outMaxKbps", outMaxKbps)
             .putInt("outMaxHeight", outMaxHeight)
+            .putBoolean("hevc", hevc)
             .putBoolean("audioTranscode", audioTranscode)
             .putInt("audioKbps", audioKbps)
             .putBoolean("goproEnabled", goproEnabled)
@@ -62,8 +64,9 @@ data class Config(
                 rtmpPort = p.getInt("rtmpPort", 1935),
                 adaptive = p.getBoolean("adaptive", false),
                 transcode = p.getBoolean("transcode", true),
-                outMaxKbps = p.getInt("outMaxKbps", 3000),
+                outMaxKbps = p.getInt("outMaxKbps", 3500),
                 outMaxHeight = p.getInt("outMaxHeight", 720),
+                hevc = p.getBoolean("hevc", true),
                 audioTranscode = p.getBoolean("audioTranscode", true),
                 audioKbps = p.getInt("audioKbps", 64),
                 goproEnabled = p.getBoolean("goproEnabled", true),

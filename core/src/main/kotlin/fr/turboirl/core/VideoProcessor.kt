@@ -22,8 +22,8 @@ interface VideoProcessor {
 }
 
 fun interface EncodedVideoSink {
-    /** One encoded access unit in Annex B (AUD + SPS/PPS on keyframes + slices), no B-frames. */
-    fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean)
+    /** One encoded access unit in Annex B (AUD + parameter sets on keyframes + slices), no B-frames. */
+    fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean, hevc: Boolean)
 }
 
 /** Same idea for audio: raw AAC frames in, ADTS frames (any bitrate) out. */

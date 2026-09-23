@@ -103,6 +103,12 @@
             android:inputType="number"
             android:singleLine="true" />
 
+        <CheckBox
+            android:id="@+id/hevc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Encoder en H.265 (HEVC) : même débit, image plus fine" />
+
         <EditText
             android:id="@+id/outMaxHeight"
             android:layout_width="match_parent"

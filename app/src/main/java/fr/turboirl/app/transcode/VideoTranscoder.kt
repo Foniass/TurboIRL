@@ -2,6 +2,7 @@ package fr.turboirl.app.transcode
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +26,7 @@ class VideoTranscoder(
     private val logger: Logger,
     initialKbps: Int,
     initialHeight: Int,
+    private val preferHevc: Boolean = false,
 ) : VideoProcessor {
 
     class Stats {
@@ -43,6 +45,7 @@ class VideoTranscoder(
         @Volatile var bytesOut = 0L
         @Volatile var restarts = 0
         @Volatile var resolutionChanges = 0
+        @Volatile var hevc = false
     }
 
     val stats = Stats()
@@ -71,8 +74,11 @@ class VideoTranscoder(
     private val freeInputs = ArrayDeque<Int>()
     private var awaitingKeyframe = true
     private var failures = 0
+    private var encoderVps: ByteArray? = null
     private var encoderSps: ByteArray? = null
     private var encoderPps: ByteArray? = null
+    private var outputHevc = false
+    private var hevcLogged = false
 
     @Volatile private var targetKbps = initialKbps
     private var cbrLogged = false
@@ -209,23 +215,40 @@ class VideoTranscoder(
         }
     }
 
+    /** H.265 when asked for and a hardware encoder exists for it, else H.264. */
+    private fun pickOutputMime(): String {
+        if (!preferHevc) return MIME
+        val hasHevc = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+            info.isEncoder && info.isHardwareAccelerated && info.supportedTypes.any { it.equals(MIME_HEVC, ignoreCase = true) }
+        }
+        if (!hasHevc && !hevcLogged) {
+            hevcLogged = true
+            logger.log("Pas d'encodeur H.265 matériel : sortie en H.264")
+        }
+        return if (hasHevc) MIME_HEVC else MIME
+    }
+
     private fun createEncoder() {
         val (w, h) = outputSize()
-        val enc = MediaCodec.createEncoderByType(MIME)
-        val format = MediaFormat.createVideoFormat(MIME, w, h).apply {
+        val mime = pickOutputMime()
+        val enc = MediaCodec.createEncoderByType(mime)
+        val format = MediaFormat.createVideoFormat(mime, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
             setInteger(MediaFormat.KEY_BIT_RATE, targetKbps * 1000)
             setInteger(MediaFormat.KEY_FRAME_RATE, 30)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_SECONDS)
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-            val caps = enc.codecInfo.getCapabilitiesForType(MIME).encoderCapabilities
+            val caps = enc.codecInfo.getCapabilitiesForType(mime).encoderCapabilities
             val cbr = caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (cbr) setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (!cbrLogged) {
                 cbrLogged = true
-                logger.log("Encodeur ${enc.name} : mode CBR ${if (cbr) "supporté" else "NON supporté (débit variable)"}")
+                logger.log("Encodeur ${enc.name} (${if (mime == MIME_HEVC) "H.265" else "H.264"}) : mode CBR ${if (cbr) "supporté" else "NON supporté (débit variable)"}")
             }
         }
+        outputHevc = mime == MIME_HEVC
+        stats.hevc = outputHevc
+        encoderVps = null
         enc.setCallback(encoderCallback, handler)
         enc.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = enc.createInputSurface()
@@ -396,34 +419,44 @@ class VideoTranscoder(
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {}
     }
 
-    /** Splits the encoder's SPS/PPS blob (Annex B) into the two NAL units. */
+    private fun nalType(nal: ByteArray): Int =
+        if (outputHevc) (nal[0].toInt() shr 1) and 0x3F else nal[0].toInt() and 0x1F
+
+    /** Splits the encoder's parameter-set blob (Annex B): SPS/PPS for H.264, VPS/SPS/PPS for H.265. */
     private fun parseCodecConfig(data: ByteArray) {
         for (nal in splitNals(data)) {
-            when (nal[0].toInt() and 0x1F) {
-                7 -> encoderSps = nal
-                8 -> encoderPps = nal
+            if (outputHevc) {
+                when (nalType(nal)) {
+                    32 -> encoderVps = nal
+                    33 -> encoderSps = nal
+                    34 -> encoderPps = nal
+                }
+            } else {
+                when (nalType(nal)) {
+                    7 -> encoderSps = nal
+                    8 -> encoderPps = nal
+                }
             }
         }
     }
 
     private fun emit(data: ByteArray, ptsMs: Long, keyframe: Boolean) {
-        val s = encoderSps
-        val p = encoderPps
-        // AUD, then on keyframes our own SPS/PPS, then the slices (minus any AUD/SPS/PPS the encoder added)
-        val nals = splitNals(data).filter { (it[0].toInt() and 0x1F) !in setOf(7, 8, 9) }
-        var size = 4 + AUD.size
-        if (keyframe && s != null && p != null) size += 8 + s.size + p.size
+        val params = listOfNotNull(if (outputHevc) encoderVps else null, encoderSps, encoderPps)
+        val complete = params.size == (if (outputHevc) 3 else 2)
+        // AUD, then on keyframes our own parameter sets, then the slices (minus any AUD/parameter sets the encoder added)
+        val skip = if (outputHevc) HEVC_NON_SLICE else H264_NON_SLICE
+        val aud = if (outputHevc) AUD_HEVC else AUD
+        val nals = splitNals(data).filter { nalType(it) !in skip }
+        var size = 4 + aud.size
+        if (keyframe && complete) for (p in params) size += 4 + p.size
         for (n in nals) size += 4 + n.size
         val out = ByteArray(size)
-        var o = putNal(out, 0, AUD)
-        if (keyframe && s != null && p != null) {
-            o = putNal(out, o, s)
-            o = putNal(out, o, p)
-        }
+        var o = putNal(out, 0, aud)
+        if (keyframe && complete) for (p in params) o = putNal(out, o, p)
         for (n in nals) o = putNal(out, o, n)
         stats.framesOut++
         stats.bytesOut += o
-        sink.encoded(out, o, ptsMs, keyframe)
+        sink.encoded(out, o, ptsMs, keyframe, outputHevc)
     }
 
     private fun putNal(out: ByteArray, off: Int, nal: ByteArray): Int {
@@ -437,11 +470,15 @@ class VideoTranscoder(
 
     companion object {
         private const val MIME = MediaFormat.MIMETYPE_VIDEO_AVC
+        private const val MIME_HEVC = MediaFormat.MIMETYPE_VIDEO_HEVC
         private const val MAX_PENDING = 60
         private const val MAX_FAILURES = 3
         private const val GOP_SECONDS = 2
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
         private val AUD = byteArrayOf(0x09, 0xF0.toByte())
+        private val AUD_HEVC = byteArrayOf(0x46, 0x01, 0x50)
+        private val H264_NON_SLICE = setOf(7, 8, 9)
+        private val HEVC_NON_SLICE = setOf(32, 33, 34, 35)
 
         /** Annex B → list of NAL units (3- or 4-byte start codes). */
         fun splitNals(data: ByteArray): List<ByteArray> {

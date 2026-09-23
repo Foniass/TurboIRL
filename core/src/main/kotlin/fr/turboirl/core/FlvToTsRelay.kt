@@ -292,9 +292,10 @@ class FlvToTsRelay(
     }
 
     /** Re-encoded video coming back from the processor (encoder thread). */
-    override fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean) {
+    override fun encoded(annexB: ByteArray, len: Int, ptsMs: Long, keyframe: Boolean, hevc: Boolean) {
         val pts = ptsMs * 90 + PTS_OFFSET
         synchronized(muxer) {
+            muxer.videoStreamType = if (hevc) TsMuxer.STREAM_TYPE_H265 else TsMuxer.STREAM_TYPE_H264
             muxer.writeVideo(annexB, len, pts, pts, ptsMs * 90, keyframe)
             stats.tsBytes = muxer.bytesWritten
         }

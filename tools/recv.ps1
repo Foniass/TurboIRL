@@ -42,7 +42,7 @@ while ($true) {
     & ffmpeg -hide_banner -loglevel warning -stats -stats_period 5 `
         -fflags +genpts -analyzeduration 2000000 -probesize 1000000 -dts_delta_threshold 1000 `
         -i $src `
-        -map 0 -fps_mode cfr -r 30 -c:v libx264 -preset veryfast -tune zerolatency -g 60 -b:v 6M -maxrate 6M -bufsize 6M -pix_fmt yuv420p `
+        -map 0 -fps_mode cfr -r 30 -c:v libx264 -preset faster -tune zerolatency -g 60 -b:v 10M -maxrate 10M -bufsize 10M -pix_fmt yuv420p `
         -af "aresample=async=1000" -c:a aac -b:a 160k -f mpegts "udp://127.0.0.1:${ObsPort}?pkt_size=1316" `
         -map 0 -c copy -max_interleave_delta 200000 -f mpegts $dump
     if ((Test-Path $dump) -and (Get-Item $dump).Length -lt 100000) { Remove-Item $dump }  # connexion sans flux
