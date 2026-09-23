@@ -81,14 +81,16 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
 2. Dans l'appli : bouton « Autoriser l'exécution en arrière-plan ».
 3. Réglages HyperOS → Applications → TurboIRL : **Démarrage automatique** activé, Économie
    de batterie → **Aucune restriction**. Dans les applis récentes, appui long sur TurboIRL → cadenas.
-4. Activer le partage de connexion, de préférence en 5 GHz.
-5. Saisir l'adresse du PC (nom DynDNS), port 9000, latence 2000 ms → **Démarrer**.
-   L'appli affiche l'URL RTMP à donner à la GoPro.
+4. Localisation activée (le hotspot automatique en a besoin) et partage de connexion du téléphone
+   **éteint** : depuis la 1.1 l'appli ouvre son propre hotspot (nom et mot de passe aléatoires qu'elle
+   donne elle-même à la caméra). Si ça échoue, elle se rabat sur le hotspot du téléphone si les champs
+   « secours » sont remplis.
+5. Saisir l'adresse du PC (nom DynDNS), port 9000, latence 12000 ms → **Démarrer**.
 
 ### 3. GoPro Hero 12
 
-**Pilotage automatique (recommandé)** : cocher « L'appli connecte la GoPro… », saisir le nom et
-le mot de passe du hotspot du téléphone, la résolution (720) et le débit max (2500), Démarrer.
+**Pilotage automatique (recommandé)** : cocher « L'appli ouvre son propre hotspot… », résolution
+(1080) et débit max (8000, la caméra accepte 800 à 10 000), Démarrer.
 La première fois : mettre la caméra en mode appairage (*Préférences → Connexions → Connecter un
 appareil → Application GoPro Quik*) et accepter la demande d'appairage Bluetooth sur le téléphone.
 Fermer Quik pendant ce temps (une seule appli peut tenir la caméra en Bluetooth). Ensuite l'appli
@@ -117,19 +119,14 @@ Chaque étape isole une inconnue. Après chaque étape, bouton **Partager le jou
 gh release create vX.Y dist/TurboIRL-X.Y.apk --title "TurboIRL X.Y" --notes "..."
 ```
 
-## Modes vidéo (au choix dans l'écran)
+## Traitement vidéo (fixe depuis la 1.1)
 
-1. **Direct** (défaut) : la vidéo de la GoPro passe telle quelle. Si la 5G sature, la vidéo est
-   suspendue par paliers mais le son continue.
-2. **Débit modulable** (0.8, expérimental) : l'appli freine sa lecture du flux caméra quand le
-   tampon SRT gonfle ; la GoPro baisse alors son propre débit (800 kb/s mini). Sans réencodage.
-3. **Réencodage sur le téléphone** (défaut depuis 0.9) : décodage matériel → redimensionnement OpenGL →
-   encodage matériel à un débit piloté par SRT (400 kb/s → « débit max en sortie »), résolution
-   480p/720p/1080p suivant le débit (« résolution max en sortie »), 15 i/s sous 700 kb/s. Le son
-   de la GoPro passe tel quel. Régler la GoPro en **1080p / 5000 kb/s** pour une meilleure source.
-   Le son est lui aussi réencodé (AAC 64 kb/s par défaut) pour tenir dans les zones faibles.
-   Réglages par défaut = ceux du test extérieur : réencodage, 3000 kb/s max, 720p max, son 64 kb/s,
-   GoPro pilotée en 720p / 4000 kb/s.
+Réencodage sur le téléphone : décodage matériel → redimensionnement OpenGL → encodage matériel H.265 à
+un débit piloté par SRT (400 kb/s → « débit vidéo max en sortie », 3500 par défaut), 720p max par
+défaut, 15 i/s puis 5 i/s quand la 5G sature, vidéo retenue et son seul en dernier recours. Le son est
+réencodé en AAC (64 kb/s par défaut) pour tenir dans les zones faibles. Les anciens modes (direct sans
+réencodage, frein caméra « débit modulable », H.264, Stream ID) ont été retirés de l'écran : ils
+n'étaient plus utilisés depuis la 0.9. Source GoPro conseillée : **1080p / 8000 kb/s**.
 
 ## Réception : règle importante
 

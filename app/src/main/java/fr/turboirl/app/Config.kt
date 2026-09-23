@@ -6,25 +6,18 @@ data class Config(
     val srtHost: String,
     val srtPort: Int,
     val srtLatencyMs: Int,
-    val srtStreamId: String,
     val rtmpPort: Int,
-    val adaptive: Boolean,
-    val transcode: Boolean,
     val outMaxKbps: Int,
     val outMaxHeight: Int,
-    val hevc: Boolean,
-    val audioTranscode: Boolean,
     val audioKbps: Int,
     val goproEnabled: Boolean,
+    /** Fallback hotspot (the phone's own tethering) if the automatic one cannot be opened. */
     val goproSsid: String,
     val goproPassword: String,
     val goproResolution: Int,
     val goproMaxKbps: Int,
     val goproAddress: String,
     val goproName: String,
-    val goproRecord: Boolean,
-    /** With goproRecord: ask the camera for a 9:16 1080p 60 fps copy (vertical, for TikTok) before starting the live. */
-    val goproSdVertical: Boolean,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -32,14 +25,9 @@ data class Config(
             .putString("srtHost", srtHost)
             .putInt("srtPort", srtPort)
             .putInt("srtLatencyMs", srtLatencyMs)
-            .putString("srtStreamId", srtStreamId)
             .putInt("rtmpPort", rtmpPort)
-            .putBoolean("adaptive", adaptive)
-            .putBoolean("transcode", transcode)
             .putInt("outMaxKbps", outMaxKbps)
             .putInt("outMaxHeight", outMaxHeight)
-            .putBoolean("hevc", hevc)
-            .putBoolean("audioTranscode", audioTranscode)
             .putInt("audioKbps", audioKbps)
             .putBoolean("goproEnabled", goproEnabled)
             .putString("goproSsid", goproSsid)
@@ -48,8 +36,6 @@ data class Config(
             .putInt("goproMaxKbps", goproMaxKbps)
             .putString("goproAddress", goproAddress)
             .putString("goproName", goproName)
-            .putBoolean("goproRecord", goproRecord)
-            .putBoolean("goproSdVertical", goproSdVertical)
             .apply()
     }
 
@@ -64,14 +50,9 @@ data class Config(
                 // 12 s of SRT latency: short 4G dips are absorbed instead of freezing (≈ 15 s end to end)
                 // 12 s (v3): the 23/09 test showed a 12 s near-total outage overflowing 8 s
                 srtLatencyMs = if (p.contains("latencyV3")) p.getInt("srtLatencyMs", 12000) else 12000,
-                srtStreamId = p.getString("srtStreamId", "").orEmpty(),
                 rtmpPort = p.getInt("rtmpPort", 1935),
-                adaptive = p.getBoolean("adaptive", false),
-                transcode = p.getBoolean("transcode", true),
                 outMaxKbps = p.getInt("outMaxKbps", 3500),
                 outMaxHeight = p.getInt("outMaxHeight", 720),
-                hevc = p.getBoolean("hevc", true),
-                audioTranscode = p.getBoolean("audioTranscode", true),
                 audioKbps = p.getInt("audioKbps", 64),
                 goproEnabled = p.getBoolean("goproEnabled", true),
                 goproSsid = p.getString("goproSsid", "").orEmpty(),
@@ -80,8 +61,6 @@ data class Config(
                 goproMaxKbps = p.getInt("goproMaxKbps", 4000),
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
                 goproName = p.getString("goproName", "").orEmpty(),
-                goproRecord = p.getBoolean("goproRecord", false),
-                goproSdVertical = p.getBoolean("goproSdVertical", false),
             )
         }
     }

@@ -27,16 +27,11 @@ class MainActivity : Activity() {
     private lateinit var srtHost: EditText
     private lateinit var srtPort: EditText
     private lateinit var srtLatency: EditText
-    private lateinit var srtStreamId: EditText
     private lateinit var toggle: Button
     private lateinit var battery: Button
     private lateinit var share: Button
-    private lateinit var adaptive: CheckBox
-    private lateinit var transcode: CheckBox
     private lateinit var outMaxKbps: EditText
     private lateinit var outMaxHeight: EditText
-    private lateinit var hevc: CheckBox
-    private lateinit var audioTranscode: CheckBox
     private lateinit var audioKbps: EditText
     private lateinit var goproEnabled: CheckBox
     private lateinit var goproSsid: EditText
@@ -44,8 +39,6 @@ class MainActivity : Activity() {
     private lateinit var goproResolution: EditText
     private lateinit var goproMaxKbps: EditText
     private lateinit var goproStatus: TextView
-    private lateinit var goproRecord: CheckBox
-    private lateinit var goproSdVertical: CheckBox
     private lateinit var rtmpUrl: TextView
     private lateinit var status: TextView
     private lateinit var log: TextView
@@ -56,16 +49,11 @@ class MainActivity : Activity() {
         srtHost = findViewById(R.id.srtHost)
         srtPort = findViewById(R.id.srtPort)
         srtLatency = findViewById(R.id.srtLatency)
-        srtStreamId = findViewById(R.id.srtStreamId)
         toggle = findViewById(R.id.toggle)
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
-        adaptive = findViewById(R.id.adaptive)
-        transcode = findViewById(R.id.transcode)
         outMaxKbps = findViewById(R.id.outMaxKbps)
         outMaxHeight = findViewById(R.id.outMaxHeight)
-        hevc = findViewById(R.id.hevc)
-        audioTranscode = findViewById(R.id.audioTranscode)
         audioKbps = findViewById(R.id.audioKbps)
         goproEnabled = findViewById(R.id.goproEnabled)
         goproSsid = findViewById(R.id.goproSsid)
@@ -73,8 +61,6 @@ class MainActivity : Activity() {
         goproResolution = findViewById(R.id.goproResolution)
         goproMaxKbps = findViewById(R.id.goproMaxKbps)
         goproStatus = findViewById(R.id.goproStatus)
-        goproRecord = findViewById(R.id.goproRecord)
-        goproSdVertical = findViewById(R.id.goproSdVertical)
         rtmpUrl = findViewById(R.id.rtmpUrl)
         status = findViewById(R.id.status)
         log = findViewById(R.id.log)
@@ -83,21 +69,14 @@ class MainActivity : Activity() {
         srtHost.setText(config.srtHost)
         srtPort.setText(config.srtPort.toString())
         srtLatency.setText(config.srtLatencyMs.toString())
-        srtStreamId.setText(config.srtStreamId)
-        adaptive.isChecked = config.adaptive
-        transcode.isChecked = config.transcode
         outMaxKbps.setText(config.outMaxKbps.toString())
         outMaxHeight.setText(config.outMaxHeight.toString())
-        hevc.isChecked = config.hevc
-        audioTranscode.isChecked = config.audioTranscode
         audioKbps.setText(config.audioKbps.toString())
         goproEnabled.isChecked = config.goproEnabled
         goproSsid.setText(config.goproSsid)
         goproPassword.setText(config.goproPassword)
         goproResolution.setText(config.goproResolution.toString())
         goproMaxKbps.setText(config.goproMaxKbps.toString())
-        goproRecord.isChecked = config.goproRecord
-        goproSdVertical.isChecked = config.goproSdVertical
         goproEnabled.setOnCheckedChangeListener { _, checked -> if (checked) requestBluetoothPermissions() }
 
         toggle.setOnClickListener { if (RelayService.instance != null) RelayService.stop(this) else startRelay() }
@@ -108,6 +87,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
         wanted.add(Manifest.permission.ACCESS_FINE_LOCATION)
         wanted.add(Manifest.permission.READ_PHONE_STATE)
+        if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.NEARBY_WIFI_DEVICES) // hotspot automatique
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
     }
@@ -134,11 +114,11 @@ class MainActivity : Activity() {
         val outMax = outMaxKbps.text.toString().toIntOrNull()
         val outH = outMaxHeight.text.toString().toIntOrNull()
         val aKbps = audioKbps.text.toString().toIntOrNull()
-        if (transcode.isChecked && audioTranscode.isChecked && (aKbps == null || aKbps !in 32..160)) {
+        if (aKbps == null || aKbps !in 32..160) {
             Toast.makeText(this, "Débit du son entre 32 et 160 kb/s", Toast.LENGTH_LONG).show()
             return
         }
-        if (transcode.isChecked && (outMax == null || outMax !in 500..8000 || outH !in setOf(480, 720, 1080))) {
+        if (outMax == null || outMax !in 500..8000 || outH !in setOf(480, 720, 1080)) {
             Toast.makeText(this, "Débit max entre 500 et 8000 kb/s, résolution max 480, 720 ou 1080", Toast.LENGTH_LONG).show()
             return
         }
@@ -146,12 +126,12 @@ class MainActivity : Activity() {
         val resolution = goproResolution.text.toString().toIntOrNull()
         val maxKbps = goproMaxKbps.text.toString().toIntOrNull()
         if (goproOn) {
-            if (goproSsid.text.isBlank() || goproPassword.text.length < 8) {
-                Toast.makeText(this, "Nom et mot de passe du hotspot requis pour piloter la GoPro", Toast.LENGTH_LONG).show()
+            if (goproSsid.text.isNotBlank() && goproPassword.text.length < 8) {
+                Toast.makeText(this, "Le mot de passe du hotspot de secours fait au moins 8 caractères", Toast.LENGTH_LONG).show()
                 return
             }
-            if (resolution !in setOf(480, 720, 1080) || maxKbps == null || maxKbps !in 800..8000) {
-                Toast.makeText(this, "Résolution 480/720/1080 et débit max entre 800 et 8000 kb/s", Toast.LENGTH_LONG).show()
+            if (resolution !in setOf(480, 720, 1080) || maxKbps == null || maxKbps !in 800..10000) {
+                Toast.makeText(this, "Résolution 480/720/1080 et débit max entre 800 et 10000 kb/s", Toast.LENGTH_LONG).show()
                 return
             }
             if (!hasBluetoothPermissions()) {
@@ -162,21 +142,14 @@ class MainActivity : Activity() {
         }
         Config.load(this).copy(
             srtHost = host, srtPort = port, srtLatencyMs = latency,
-            srtStreamId = srtStreamId.text.toString().trim(),
-            adaptive = adaptive.isChecked,
-            transcode = transcode.isChecked,
             outMaxKbps = outMax ?: 3000,
             outMaxHeight = outH ?: 720,
-            hevc = hevc.isChecked,
-            audioTranscode = audioTranscode.isChecked,
             audioKbps = aKbps ?: 64,
             goproEnabled = goproOn,
             goproSsid = goproSsid.text.toString().trim(),
             goproPassword = goproPassword.text.toString(),
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
-            goproRecord = goproRecord.isChecked,
-            goproSdVertical = goproSdVertical.isChecked,
         ).save(this)
         RelayService.start(this)
     }
@@ -185,29 +158,23 @@ class MainActivity : Activity() {
         val service = RelayService.instance
         val running = service != null
         toggle.text = if (running) "Arrêter" else "Démarrer"
-        for (field in listOf(srtHost, srtPort, srtLatency, srtStreamId, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps)) {
+        for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps)) {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
-        goproRecord.isEnabled = !running
-        goproSdVertical.isEnabled = !running
-        adaptive.isEnabled = !running
-        transcode.isEnabled = !running
-        hevc.isEnabled = !running
-        audioTranscode.isEnabled = !running
         val gp = service?.snapshot?.gopro
         goproStatus.text = when {
             gp != null -> "GoPro ${gp.cameraName} : ${gp.state.label}" +
                 (if (gp.detail.isNotEmpty()) "\n  ${gp.detail}" else "") +
                 (if (gp.cameraBitrateKbps > 0) "\n  débit caméra ${gp.cameraBitrateKbps} kb/s" else "")
-            running -> "Pilotage désactivé : la GoPro se règle à la main (URL ci-dessous)"
+            running -> "Pilotage désactivé : la GoPro se règle à la main (URL ci-dessous, partage de connexion à allumer)"
             else -> ""
         }
 
         val rtmpPort = Config.load(this).rtmpPort
         val addresses = NetUtil.localAddresses()
         rtmpUrl.text = if (addresses.isEmpty()) {
-            "Aucune adresse locale : active le partage de connexion."
+            "Aucune adresse locale (le hotspot automatique s'ouvre au démarrage)."
         } else {
             addresses.joinToString("\n") { "rtmp://${it.ip}:$rtmpPort/live/gopro   (${it.iface})" }
         }

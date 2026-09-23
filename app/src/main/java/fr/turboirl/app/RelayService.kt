@@ -50,7 +50,8 @@ class RelayService : Service() {
     private var relay: FlvToTsRelay? = null
     private var srtSender: SrtSender? = null
     private var gopro: GoProController? = null
-    private var governor: BitrateGovernor? = null
+    private var hotspot: AutoHotspot? = null
+    @Volatile private var stopping = false
     private var transcoder: VideoTranscoder? = null
     private var abr: AdaptiveBitrate? = null
     private var audioTranscoder: AudioTranscoder? = null
@@ -93,30 +94,22 @@ class RelayService : Service() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TurboIRL:relay").apply { acquire() }
 
-        // With a transcoder the bitrate controller reacts first; audio priority is only the last resort.
-        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, config.srtStreamId, logger, if (config.transcode) 0.6 else 0.4)
+        // Fixed since 0.9 (validated outdoors): phone-side re-encode in H.265 with the bitrate controller reacting
+        // first, audio re-encoded, audio priority as the last resort (video withheld at 60 % of the latency).
+        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, "", logger, 0.6)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
-        // Without a transcoder, keep one keyframe per GOP flowing while video is withheld (OBS loses its
-        // audio timing after a gap of a few seconds in the video)
         flvRelay.trickleKeyframes = true
-        // With the camera brake, a small receive buffer makes the back-pressure reach the camera fast.
-        val brake = config.adaptive && !config.transcode
-        val server = RtmpServer(config.rtmpPort, flvRelay, logger, if (brake) 64 * 1024 else 0)
-        if (config.transcode) {
-            val minKbps = 400
-            val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight, config.hevc)
-            flvRelay.processor = tc
-            flvRelay.growingHold = false
-            transcoder = tc
-            val audioKbps = if (config.audioTranscode) config.audioKbps else 128
-            if (config.audioTranscode) {
-                val at = AudioTranscoder(flvRelay, logger, config.audioKbps)
-                flvRelay.audioProcessor = at
-                audioTranscoder = at
-            }
-            abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, audioKbps * 13 / 10 + 40, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
-            logger.log("Réencodage activé : vidéo ${minKbps}-${config.outMaxKbps} kb/s jusqu'à ${config.outMaxHeight}p" + (if (config.hevc) " en H.265" else " en H.264") + (if (config.audioTranscode) ", son ${config.audioKbps} kb/s" else ", son d'origine"))
-        }
+        val server = RtmpServer(config.rtmpPort, flvRelay, logger, 0)
+        val minKbps = 400
+        val tc = VideoTranscoder(flvRelay, logger, (config.outMaxKbps * 4 / 10).coerceAtLeast(minKbps), config.outMaxHeight, true)
+        flvRelay.processor = tc
+        flvRelay.growingHold = false
+        transcoder = tc
+        val at = AudioTranscoder(flvRelay, logger, config.audioKbps)
+        flvRelay.audioProcessor = at
+        audioTranscoder = at
+        abr = AdaptiveBitrate(sender, tc, config.srtLatencyMs, minKbps, config.outMaxKbps, config.outMaxHeight, config.audioKbps * 13 / 10 + 40, { flvRelay.stats.videoSuspended }, logger).also { it.start() }
+        logger.log("Réencodage : vidéo ${minKbps}-${config.outMaxKbps} kb/s jusqu'à ${config.outMaxHeight}p en H.265, son ${config.audioKbps} kb/s")
         try {
             server.start()
         } catch (e: Exception) {
@@ -130,54 +123,89 @@ class RelayService : Service() {
         rtmpServer = server
         lastError = null
         logger.log("Relais démarré → srt://${config.srtHost}:${config.srtPort}")
-        if (brake) {
-            governor = BitrateGovernor(sender, server.limiter, config.srtLatencyMs, config.goproMaxKbps, logger).also { it.start() }
-            logger.log("Débit modulable activé : frein caméra entre 900 et ${config.goproMaxKbps} kb/s")
-        }
 
-        if (config.goproEnabled) {
-            val controller = GoProController(
-                this,
-                GoProController.Settings(
-                    ssid = config.goproSsid, password = config.goproPassword,
-                    resolution = config.goproResolution, maxKbps = config.goproMaxKbps,
-                    knownAddress = config.goproAddress.ifEmpty { null },
-                    recordLocally = config.goproRecord,
-                    sdVertical = config.goproSdVertical,
-                ),
-                logger,
-                rtmpUrl = {
-                    NetUtil.localAddresses().firstOrNull { NetUtil.isHotspot(it.iface) }
-                        ?.let { "rtmp://${it.ip}:${config.rtmpPort}/live/gopro" }
-                },
-                cameraPublishing = { flvRelay.stats.publishing },
-                onDeviceLearnt = { address, name ->
-                    Config.load(this).copy(goproAddress = address, goproName = name).save(this)
-                },
-            )
-            controller.start()
-            gopro = controller
-            logger.log("Pilotage GoPro activé (hotspot « ${config.goproSsid} »)")
-        }
+        if (config.goproEnabled) startCamera(config, flvRelay)
 
         lastTickNs = System.nanoTime()
         handler.postDelayed(::tick, 1000)
         return START_STICKY
     }
 
+    /** Opens the app's own hotspot, then drives the camera with its credentials (manual hotspot as fallback). */
+    private fun startCamera(config: Config, flvRelay: FlvToTsRelay) {
+        val hs = AutoHotspot(this, logger)
+        hotspot = hs
+        hs.start(
+            handler,
+            onReady = { ssid, password ->
+                if (!stopping) startController(config, flvRelay, ssid, password, automatic = true)
+            },
+            onFailed = { reason ->
+                if (stopping) return@start
+                if (config.goproSsid.isNotEmpty() && config.goproPassword.length >= 8) {
+                    logger.log("Hotspot automatique impossible ($reason) : hotspot de secours « ${config.goproSsid} », à allumer à la main")
+                    startController(config, flvRelay, config.goproSsid, config.goproPassword, automatic = false)
+                } else {
+                    logger.log("Hotspot automatique impossible ($reason) et pas de hotspot de secours renseigné : GoPro non pilotée")
+                }
+            },
+            onStopped = {
+                if (stopping) return@start
+                logger.log("Hotspot automatique arrêté par le système (partage de connexion allumé ?) : nouvel essai dans 5 s")
+                gopro?.let { c ->
+                    gopro = null
+                    Thread { c.stop() }.start()
+                }
+                handler.postDelayed({ if (!stopping) startCamera(config, flvRelay) }, 5000)
+            },
+        )
+    }
+
+    private fun startController(config: Config, flvRelay: FlvToTsRelay, ssid: String, password: String, automatic: Boolean) {
+        gopro?.let { old ->
+            gopro = null
+            Thread { old.stop() }.start()
+        }
+        val controller = GoProController(
+            this,
+            GoProController.Settings(
+                ssid = ssid, password = password,
+                resolution = config.goproResolution, maxKbps = config.goproMaxKbps,
+                knownAddress = config.goproAddress.ifEmpty { null },
+            ),
+            logger,
+            rtmpUrl = {
+                val addresses = NetUtil.localAddresses()
+                // Soft AP interface first; the app's own hotspot may use an unusual name, so anything but the
+                // phone's Wi-Fi client (wlan0) will do then.
+                val a = addresses.firstOrNull { NetUtil.isHotspot(it.iface) }
+                    ?: if (automatic) addresses.firstOrNull { it.iface != "wlan0" } else null
+                a?.let { "rtmp://${it.ip}:${config.rtmpPort}/live/gopro" }
+            },
+            cameraPublishing = { flvRelay.stats.publishing },
+            onDeviceLearnt = { address, name ->
+                Config.load(this).copy(goproAddress = address, goproName = name).save(this)
+            },
+        )
+        controller.start()
+        gopro = controller
+        logger.log("Pilotage GoPro activé (${if (automatic) "hotspot automatique" else "hotspot du téléphone"} « $ssid »)")
+    }
+
     override fun onDestroy() {
+        stopping = true
         handler.removeCallbacksAndMessages(null)
+        hotspot?.stop()
+        hotspot = null
         telemetry?.stop()
         telemetry = null
         val server = rtmpServer
         val sender = srtSender
         val controller = gopro
-        val gov = governor
         val tc = transcoder
         val at = audioTranscoder
         val ab = abr
         audioTranscoder = null
-        governor = null
         transcoder = null
         abr = null
         rtmpServer = null
@@ -187,7 +215,6 @@ class RelayService : Service() {
         // Socket teardown can block for a few seconds: keep it off the main thread.
         Thread {
             ab?.stop()
-            gov?.stop()
             tc?.release()
             at?.release()
             controller?.stop()
@@ -221,7 +248,7 @@ class RelayService : Service() {
             videoSuspensions = stats.videoSuspensions,
             videoSuspendedMs = stats.videoSuspendedMs,
             gopro = gopro,
-            cameraLimitKbps = governor?.limitKbps ?: 0,
+            cameraLimitKbps = 0,
             transcoder = transcoder,
             encoderTargetKbps = abr?.targetKbps ?: 0,
             encoderOutKbps = transcoder?.let { t -> val b = t.stats.bytesOut; val r = ((b - lastEncBytes) * 8 / 1000 / seconds).toLong(); lastEncBytes = b; r } ?: 0,

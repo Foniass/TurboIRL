@@ -62,22 +62,7 @@
                 android:inputType="number"
                 android:singleLine="true" />
 
-            <EditText
-                android:id="@+id/srtStreamId"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="2"
-                android:hint="Stream ID (optionnel)"
-                android:importantForAutofill="no"
-                android:inputType="textNoSuggestions"
-                android:singleLine="true" />
         </LinearLayout>
-
-        <CheckBox
-            android:id="@+id/transcode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Réencodage sur le téléphone : débit vidéo adapté en continu, son intact" />
 
         <EditText
             android:id="@+id/outMaxKbps"
@@ -88,12 +73,6 @@
             android:inputType="number"
             android:singleLine="true" />
 
-        <CheckBox
-            android:id="@+id/audioTranscode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Réencoder le son (plus léger, tient dans les zones faibles)" />
-
         <EditText
             android:id="@+id/audioKbps"
             android:layout_width="match_parent"
@@ -103,12 +82,6 @@
             android:inputType="number"
             android:singleLine="true" />
 
-        <CheckBox
-            android:id="@+id/hevc"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Encoder en H.265 (HEVC) : même débit, image plus fine" />
-
         <EditText
             android:id="@+id/outMaxHeight"
             android:layout_width="match_parent"
@@ -117,12 +90,6 @@
             android:importantForAutofill="no"
             android:inputType="number"
             android:singleLine="true" />
-
-        <CheckBox
-            android:id="@+id/adaptive"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Débit modulable : freiner la caméra quand la 5G sature (expérimental)" />
 
         <Button
             android:id="@+id/toggle"
@@ -140,7 +107,7 @@
             android:id="@+id/goproEnabled"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="L'appli connecte la GoPro au hotspot et lance le live toute seule" />
+            android:text="L'appli ouvre son propre hotspot, y connecte la GoPro et lance le live toute seule" />
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -152,7 +119,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Nom du hotspot (SSID)"
+                android:hint="Secours : nom du hotspot du téléphone"
                 android:importantForAutofill="no"
                 android:inputType="textNoSuggestions"
                 android:singleLine="true" />
@@ -162,7 +129,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Mot de passe du hotspot"
+                android:hint="Secours : mot de passe"
                 android:importantForAutofill="no"
                 android:inputType="textVisiblePassword"
                 android:singleLine="true" />
@@ -193,18 +160,6 @@
                 android:inputType="number"
                 android:singleLine="true" />
         </LinearLayout>
-
-        <CheckBox
-            android:id="@+id/goproRecord"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Enregistrer aussi sur la carte SD de la GoPro (chauffe, ~9 Go/h)" />
-
-        <CheckBox
-            android:id="@+id/goproSdVertical"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Copie SD en 9:16 1080p 60 i/s (vertical, TikTok) — le live reste en 16:9 30 i/s" />
 
         <TextView
             android:id="@+id/goproStatus"
