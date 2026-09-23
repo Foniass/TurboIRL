@@ -54,6 +54,26 @@ class GoProController(
         private set
 
     @Volatile var cameraBitrateKbps = 0
+    private var capabilitiesLogged = false
+
+    /** proto2 repeated enums may arrive packed (one length-delimited blob of varints). */
+    private fun packedVarints(m: Proto.Message, field: Int): List<Long> {
+        val blob = m.bytes(field) ?: return emptyList()
+        val out = ArrayList<Long>()
+        var i = 0
+        while (i < blob.size) {
+            var v = 0L
+            var shift = 0
+            while (i < blob.size) {
+                val b = blob[i++].toInt() and 0xFF
+                v = v or ((b and 0x7F).toLong() shl shift)
+                shift += 7
+                if (b and 0x80 == 0) break
+            }
+            out.add(v)
+        }
+        return out
+    }
         private set
 
     private val ble = GoProBle(context, logger)
@@ -389,6 +409,17 @@ class GoProController(
             }
         }
         m.int(2)?.let { liveError = it }
+        if (!capabilitiesLogged && (m.int(9) != null || m.longs(5).isNotEmpty())) {
+            // Static limits of the camera's live encoder (Open GoPro NotifyLiveStreamStatus fields 5/6/8/9):
+            // the bitrate we ask for is only a wish, this is what the camera can actually do
+            capabilitiesLogged = true
+            val sizes = m.longs(5).ifEmpty { packedVarints(m, 5) }.map { WINDOW_LABELS[it.toInt()] ?: "taille $it" }
+            logger.log(
+                "GoPro : capacités du live — débit ${m.int(8) ?: "?"} à ${m.int(9) ?: "?"} kb/s, " +
+                    "résolutions ${sizes.ifEmpty { listOf("?") }.joinToString("/")}, " +
+                    "enregistrement carte SD pendant le live ${if (m.bool(6) == true) "possible" else "non"}"
+            )
+        }
         m.int(4)?.let {
             if (it != cameraBitrateKbps) {
                 cameraBitrateKbps = it
