@@ -50,10 +50,20 @@ class Repeater:
         # image noire yuv420p tant que rien n'est arrivé
         self.latest = bytes([16]) * (self.w * self.h) + bytes([128]) * (self.w * self.h // 2)
         self.frame_lock = threading.Lock()
+        # images en attente (horodatage d'arrivée, image) : l'image envoyée est la plus récente arrivée depuis
+        # au moins `prefill_ms`, pour qu'elle subisse le même retard que le son dans sa file → son et image
+        # restent alignés à ~20 ms près au lieu de dériver de la hauteur de la file son
+        self.frame_delay = a.prefill_ms / 1000
+        self.frame_queue = deque()
         self.fifo = deque()
         self.fifo_len = 0
         self.fifo_lock = threading.Lock()
         self.audio_started = False
+        self.slack = int(self.rate * 0.3) * self.bytes_per_sample  # marge au-dessus du préchargement avant rattrapage doux
+        self.ticks = 0
+        self.fifo_min, self.fifo_max = 1 << 30, 0
+        self.last_video_in = self.last_audio_in = 0.0
+        self.video_gap_max = self.audio_gap_max = 0.0  # plus long silence d'arrivée depuis le décodeur (jitter)
 
         # compteurs pour le journal
         self.frames_in = self.frames_out = self.repeated = 0
@@ -78,9 +88,13 @@ class Repeater:
                         if n == 0:
                             raise ConnectionError
                         got += n
+                    now = time.perf_counter()
                     with self.frame_lock:
-                        self.latest = bytes(buf)
+                        self.frame_queue.append((now, bytes(buf)))
                     self.frames_in += 1
+                    if self.last_video_in:
+                        self.video_gap_max = max(self.video_gap_max, now - self.last_video_in)
+                    self.last_video_in = now
             except (ConnectionError, OSError):
                 pass
             finally:
@@ -99,11 +113,16 @@ class Repeater:
                     data = conn.recv(65536)
                     if not data:
                         break
+                    now = time.perf_counter()
+                    if self.last_audio_in:
+                        self.audio_gap_max = max(self.audio_gap_max, now - self.last_audio_in)
+                    self.last_audio_in = now
                     with self.fifo_lock:
                         self.fifo.append(data)
                         self.fifo_len += len(data)
+                        self.fifo_max = max(self.fifo_max, self.fifo_len)
                         if self.fifo_len > self.max_fifo:
-                            # trop de retard accumulé : on saute en avant (on garde le plus récent)
+                            # décodeur parti en rafale (reconnexion) : on saute en avant d'un coup
                             while self.fifo_len > self.prefill and self.fifo:
                                 old = self.fifo.popleft()
                                 self.fifo_len -= len(old)
@@ -123,23 +142,36 @@ class Repeater:
                     self.silence_chunks += 1
                     return None
                 self.audio_started = True
+            self.fifo_min = min(self.fifo_min, self.fifo_len)
             if self.fifo_len < self.audio_chunk:
                 # file vide : silence, et on redemande un petit préchargement avant de reprendre
                 self.audio_started = False
                 self.silence_chunks += 1
                 return None
-            out = bytearray()
-            while len(out) < self.audio_chunk:
-                need = self.audio_chunk - len(out)
-                head = self.fifo[0]
-                if len(head) <= need:
-                    out += head
-                    self.fifo.popleft()
-                else:
-                    out += head[:need]
-                    self.fifo[0] = head[need:]
-            self.fifo_len -= self.audio_chunk
-            return bytes(out)
+            if self.fifo_len > self.prefill + self.slack and self.ticks % 50 == 0:
+                # file trop haute (le son a pris du retard sur l'image) : on saute 20 ms une fois par seconde
+                self._drop(self.audio_chunk)
+            self.ticks += 1
+            return self._take(self.audio_chunk)
+
+    def _take(self, n):
+        """Retire n octets de la file (verrou déjà pris)."""
+        out = bytearray()
+        while len(out) < n:
+            need = n - len(out)
+            head = self.fifo[0]
+            if len(head) <= need:
+                out += head
+                self.fifo.popleft()
+            else:
+                out += head[:need]
+                self.fifo[0] = head[need:]
+        self.fifo_len -= n
+        return bytes(out)
+
+    def _drop(self, n):
+        self._take(n)
+        self.skipped_bytes += n
 
     # ---------------------------------------------------------------- sortie (encodeur)
     def output(self):
@@ -191,6 +223,9 @@ class Repeater:
                 if now < next_v:
                     time.sleep(next_v - now)
                 with self.frame_lock:
+                    # promeut en `latest` toutes les images arrivées depuis plus de frame_delay
+                    while self.frame_queue and now - self.frame_queue[0][0] >= self.frame_delay:
+                        self.latest = self.frame_queue.popleft()[1]
                     frame = self.latest
                 cv.sendall(frame)
                 self.frames_out += 1
@@ -223,12 +258,16 @@ class Repeater:
             d = [c - p for c, p in zip(cur, prev)]
             prev = cur
             with self.fifo_lock:
-                fifo_ms = self.fifo_len / self.bytes_per_sample / self.rate * 1000
+                ms = 1000 / self.bytes_per_sample / self.rate
+                fifo = f"{self.fifo_min * ms:.0f}-{self.fifo_max * ms:.0f} ms" if self.fifo_max else "vide"
+                self.fifo_min, self.fifo_max = 1 << 30, 0
             log(
                 f"10 s : images reçues {d[0]}, envoyées {d[1]} (dont répétées {d[2]}), "
-                f"silence inséré {d[3] * 20} ms, file son {fifo_ms:.0f} ms, "
+                f"silence inséré {d[3] * 20} ms, son sauté {self.skipped_bytes / self.bytes_per_sample / self.rate * 1000:.0f} ms au total, file son {fifo}, "
+                f"arrivées espacées au plus de {self.audio_gap_max * 1000:.0f} ms (son) / {self.video_gap_max * 1000:.0f} ms (image), "
                 f"décodeur {'connecté' if self.video_connected else 'absent'}"
             )
+            self.video_gap_max = self.audio_gap_max = 0.0
 
     def run(self):
         for fn in (self.video_in, self.audio_in, self.output, self.stats):
@@ -249,8 +288,11 @@ def main():
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--rate", type=int, default=48000)
     ap.add_argument("--channels", type=int, default=2)
-    ap.add_argument("--prefill-ms", type=int, default=150, help="son mis en réserve avant de commencer à le jouer")
-    ap.add_argument("--max-ms", type=int, default=600, help="au-delà, on saute en avant pour ne pas prendre de retard")
+    # 500 ms : le téléphone (≤ 0.99) met 16 trames AAC (340 ms) dans chaque PES audio, le son arrive donc par
+    # rafales de 340 ms ; avec moins de réserve la file se vidait (micro-silences). L'image est retardée d'autant,
+    # l'alignement son/image ne change pas (±170 ms de flottement tant que le téléphone groupe les trames).
+    ap.add_argument("--prefill-ms", type=int, default=500, help="son mis en réserve avant de commencer à le jouer (l'image est retardée d'autant)")
+    ap.add_argument("--max-ms", type=int, default=1500, help="au-delà, on saute en avant d'un coup (rafale après reconnexion)")
     try:
         Repeater(ap.parse_args()).run()
     except KeyboardInterrupt:

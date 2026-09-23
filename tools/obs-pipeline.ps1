@@ -17,7 +17,7 @@ $RepeaterFps = 30
 
 # Options d'entrée du décodeur : timestamps régénérés si absents, tolérance aux sauts d'horloge du téléphone.
 # -threads 1 : le décodeur HEVC multi-thread garde ~16 images en attente, soit 3 s de retard à 5 i/s (mode dégradé).
-$InputArgs = @("-fflags", "+genpts", "-analyzeduration", "2000000", "-probesize", "1000000", "-dts_delta_threshold", "1000", "-threads", "1")
+$InputArgs = @("-fflags", "+genpts+nobuffer", "-flags", "low_delay", "-analyzeduration", "2000000", "-probesize", "1000000", "-dts_delta_threshold", "1000", "-threads", "1")
 
 function Start-Repeater {
     Start-Process python -NoNewWindow -PassThru -ArgumentList @(
@@ -56,8 +56,8 @@ function DecoderOutputArgs {
     $w, $h = $RepeaterSize.Split("x")
     @(
         "-map", "0:v:0", "-fps_mode", "passthrough", "-vf", "scale=${w}:${h},format=yuv420p",
-        "-f", "rawvideo", "tcp://127.0.0.1:$($RepeaterPorts.InVideo)",
-        "-map", "0:a:0", "-af", "aresample=async=1000", "-f", "s16le", "-ar", "48000", "-ac", "2",
+        "-flush_packets", "1", "-f", "rawvideo", "tcp://127.0.0.1:$($RepeaterPorts.InVideo)",
+        "-map", "0:a:0", "-af", "aresample=async=1000", "-flush_packets", "1", "-f", "s16le", "-ar", "48000", "-ac", "2",
         "tcp://127.0.0.1:$($RepeaterPorts.InAudio)"
     )
 }
