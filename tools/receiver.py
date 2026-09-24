@@ -30,6 +30,112 @@ from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from obs import Obs  # noqa: E402
+import json  # noqa: E402
+import urllib.request  # noqa: E402
+
+DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
+
+
+def vps_read_token():
+    """Jeton de lecture de l'API du VPS : ~/.turboirl-vps.env (READ_TOKEN=…) ou TURBOIRL_READ_TOKEN."""
+    t = os.environ.get("TURBOIRL_READ_TOKEN")
+    if t:
+        return t
+    try:
+        for line in open(os.path.join(os.path.expanduser("~"), ".turboirl-vps.env"), encoding="utf-8"):
+            if line.startswith("READ_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+class ObsControl:
+    """Le téléphone commande le stream OBS à travers l'API du VPS : le récepteur relève la commande (start/stop)
+    toutes les 3 s, l'exécute sur OBS par WebSocket, l'acquitte, et publie l'état d'OBS toutes les 5 s (ouvert,
+    en direct, durée, débit sortant). OBS n'est jamais exposé : le PC ne fait que tirer sur l'API."""
+
+    def __init__(self, base_url, token, dry_run=False):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.dry_run = dry_run
+        self.last_id = 0
+        self.last_bytes = None
+        self.last_bytes_at = 0.0
+        self.failures = 0
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+        log(f"commande OBS : à l'écoute de {self.base_url}" + (" (simulation, sans lancer le stream)" if self.dry_run else ""))
+
+    def api(self, method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(self.base_url + path, data=data, method=method)
+        req.add_header("Authorization", "Bearer " + self.token)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return json.loads(r.read().decode("utf-8") or "{}")
+
+    def loop(self):
+        n = 0
+        while True:
+            try:
+                if n % 3 == 0:
+                    cmd = self.api("GET", f"/api/turboirl/command?after={self.last_id}")
+                    if cmd.get("id"):
+                        self.last_id = cmd["id"]
+                        result = self.execute(cmd.get("action"))
+                        log(f"commande OBS #{cmd['id']} {cmd.get('action')} (de {cmd.get('device', '?')}) : {result}")
+                        self.api("POST", "/api/turboirl/command/ack", {"id": cmd["id"], "result": result})
+                if n % 5 == 0:
+                    self.api("POST", "/api/turboirl/obs", self.status())
+                self.failures = 0
+            except Exception as e:
+                self.failures += 1
+                if self.failures in (1, 20, 200):  # au 1er échec, puis de loin en loin
+                    log(f"commande OBS : API injoignable ({e})")
+            n += 1
+            time.sleep(1)
+
+    def execute(self, action):
+        if action not in ("start", "stop"):
+            return "action inconnue"
+        try:
+            obs = Obs()
+        except Exception as e:
+            return f"OBS fermé ou WebSocket inactif ({e})"
+        try:
+            active = obs.request("GetStreamStatus").get("outputActive", False)
+            if action == "start":
+                if active:
+                    return "déjà en direct"
+                if self.dry_run:
+                    return "stream lancé (simulation)"
+                obs.request("StartStream")
+                return "stream lancé"
+            if not active:
+                return "déjà arrêté"
+            if self.dry_run:
+                return "stream arrêté (simulation)"
+            obs.request("StopStream")
+            return "stream arrêté"
+        except Exception as e:
+            return f"refusé par OBS ({e})"
+
+    def status(self):
+        try:
+            st = Obs().request("GetStreamStatus")
+        except Exception:
+            self.last_bytes = None
+            return {"obsOpen": False, "streaming": False, "timecode": "", "kbps": 0}
+        now = time.time()
+        kbps = 0
+        b = st.get("outputBytes", 0)
+        if self.last_bytes is not None and now > self.last_bytes_at and b >= self.last_bytes:
+            kbps = (b - self.last_bytes) * 8 / (now - self.last_bytes_at) / 1000
+        self.last_bytes, self.last_bytes_at = b, now
+        return {"obsOpen": True, "streaming": bool(st.get("outputActive")), "timecode": st.get("outputTimecode", "")[:8], "kbps": kbps}
 
 TS_PACKET = 188
 
@@ -589,6 +695,12 @@ class Receiver:
         if self.a.obs_overlay:
             overlay = ObsOverlay(self, self.a.obs_overlay, self.a.overlay_text, self.a.freeze_seconds)
             overlay.start()
+        if not self.a.no_vps:
+            token = vps_read_token()
+            if token:
+                ObsControl(self.a.vps_url, token, dry_run=self.a.dry_run_obs).start()
+            else:
+                log("commande OBS désactivée : pas de jeton de lecture (~/.turboirl-vps.env)")
         time.sleep(0.5)
         log(f"récepteur prêt : {self.w}x{self.h} à {self.fps} i/s, son {self.rate} Hz, réserve {self.a.prefill_ms} ms")
         try:
@@ -619,6 +731,9 @@ def main():
                     help="source texte OBS à piloter (obs-websocket) ; vide = pas d'incrustation")
     ap.add_argument("--overlay-text", default="Petite coupure, le stream revient dans un instant")
     ap.add_argument("--freeze-seconds", type=float, default=3.0, help="image figée depuis autant de secondes → message")
+    ap.add_argument("--vps-url", default=DEFAULT_VPS_URL, help="API du VPS pour la commande OBS depuis le téléphone")
+    ap.add_argument("--no-vps", action="store_true", help="ne pas écouter les commandes OBS du téléphone")
+    ap.add_argument("--dry-run-obs", action="store_true", help="acquitte les commandes sans vraiment lancer/arrêter le stream OBS")
     ap.add_argument("--in-video", type=int, default=9021)
     ap.add_argument("--in-audio", type=int, default=9022)
     ap.add_argument("--out-video", type=int, default=9031)

@@ -32,6 +32,10 @@ class MainActivity : Activity() {
     private lateinit var share: Button
     private lateinit var tethering: Button
     private lateinit var sendVps: Button
+    private lateinit var obsStart: Button
+    private lateinit var obsStop: Button
+    private lateinit var obsStatus: TextView
+    @Volatile private var obsPolling = false
     private lateinit var vpsToken: EditText
     private lateinit var outMaxKbps: EditText
     private lateinit var outMaxHeight: EditText
@@ -57,6 +61,9 @@ class MainActivity : Activity() {
         share = findViewById(R.id.share)
         tethering = findViewById(R.id.tethering)
         sendVps = findViewById(R.id.sendVps)
+        obsStart = findViewById(R.id.obsStart)
+        obsStop = findViewById(R.id.obsStop)
+        obsStatus = findViewById(R.id.obsStatus)
         vpsToken = findViewById(R.id.vpsToken)
         outMaxKbps = findViewById(R.id.outMaxKbps)
         outMaxHeight = findViewById(R.id.outMaxHeight)
@@ -91,6 +98,8 @@ class MainActivity : Activity() {
         share.setOnClickListener { shareLog() }
         tethering.setOnClickListener { openTetheringSettings() }
         sendVps.setOnClickListener { sendJournalToVps() }
+        obsStart.setOnClickListener { confirmObs("start") }
+        obsStop.setOnClickListener { confirmObs("stop") }
 
         val wanted = ArrayList<String>()
         if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -103,11 +112,59 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        obsPolling = true
+        Thread { pollObs() }.start()
     }
 
     override fun onPause() {
+        obsPolling = false
         handler.removeCallbacksAndMessages(null)
         super.onPause()
+    }
+
+    /** Every 5 s while the screen is visible: OBS state on the PC, as published by the receiver through the VPS. */
+    private fun pollObs() {
+        while (obsPolling) {
+            val token = vpsToken.text.toString().trim()
+            val text = if (token.isEmpty()) {
+                "OBS PC : renseigne le jeton VPS pour piloter le stream"
+            } else {
+                val st = Uploader.fetchObsStatus(Config.load(this).vpsUrl, token)
+                when {
+                    st == null -> "OBS PC : VPS injoignable"
+                    !st.optBoolean("receiverOk") -> "OBS PC : récepteur PC absent (PC éteint ou récepteur non lancé)"
+                    !st.optBoolean("obsOpen") -> "OBS PC : OBS fermé sur le PC"
+                    st.optBoolean("streaming") -> "OBS PC : EN DIRECT depuis ${st.optString("timecode")} · ${st.optInt("kbps")} kb/s"
+                    else -> "OBS PC : prêt, pas en direct"
+                } + (st?.optJSONObject("lastCommand")?.let { c ->
+                    if (c.optBoolean("done")) "\n  dernière commande ${c.optString("action")} : ${c.optString("result")}"
+                    else "\n  commande ${c.optString("action")} en attente du PC…"
+                } ?: "")
+            }
+            handler.post { obsStatus.text = text }
+            try {
+                Thread.sleep(5000)
+            } catch (_: InterruptedException) {
+                return
+            }
+        }
+    }
+
+    private fun confirmObs(action: String) {
+        val token = vpsToken.text.toString().trim()
+        if (token.isEmpty()) {
+            Toast.makeText(this, "Jeton VPS manquant", Toast.LENGTH_LONG).show()
+            return
+        }
+        val label = if (action == "start") "Lancer le stream OBS sur le PC ?" else "Arrêter le stream OBS sur le PC ?"
+        android.app.AlertDialog.Builder(this)
+            .setMessage(label)
+            .setPositiveButton("Oui") { _, _ ->
+                val url = Config.load(this).copy(vpsToken = token).also { it.save(this) }.vpsUrl
+                Uploader.postCommand(url, token, action) { msg -> handler.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() } }
+            }
+            .setNegativeButton("Non", null)
+            .show()
     }
 
     private fun startRelay() {

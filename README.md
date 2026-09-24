@@ -73,6 +73,11 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
    position et animations libres dans OBS, seule la visibilité est pilotée) et la masque dès que des images à
    l'heure reviennent. Si la source est supprimée ou OBS fermé, il réessaie toutes les 2 s. Options `--obs-overlay`, `--overlay-text`,
    `--freeze-seconds` de `receiver.py`.
+   Stream OBS depuis le téléphone : les boutons « Lancer / Arrêter le stream OBS » de l'appli déposent une
+   commande sur l'API du VPS ; le récepteur la relève toutes les 3 s, l'exécute sur OBS (WebSocket local),
+   l'acquitte et publie l'état d'OBS toutes les 5 s, affiché dans l'appli (« OBS PC : EN DIRECT depuis … »).
+   OBS n'est jamais exposé sur internet. Conditions : OBS ouvert avec sa clé de stream, récepteur lancé,
+   jeton de lecture dans `~/.turboirl-vps.env`. Options `--no-vps`, `--dry-run-obs` (acquitte sans lancer).
 
    ```bash
    powershell -ExecutionPolicy Bypass -File tools/replay.ps1 -Dump dumps/dump-20260923-181204.ts -StartSec 440 -DurationSec 60

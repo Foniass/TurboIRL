@@ -170,5 +170,47 @@ class Uploader(
 
         fun isoNow(): String =
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.ROOT).format(java.util.Date())
+
+        /** Asks the PC receiver (through the VPS) to start or stop the OBS stream. Result on the calling thread's callback. */
+        fun postCommand(baseUrl: String, token: String, action: String, done: (String) -> Unit) {
+            Thread {
+                val msg = try {
+                    val body = JSONObject().put("device", android.os.Build.MODEL).put("action", action).toString()
+                    http(baseUrl.trimEnd('/') + "/api/turboirl/command", token, body)?.let { "commande $action envoyée (#${it.optInt("id")})" }
+                        ?: "commande refusée par le VPS"
+                } catch (e: Exception) {
+                    "VPS injoignable (${e.message})"
+                }
+                done(msg)
+            }.start()
+        }
+
+        /** OBS state as published by the PC receiver (null if the VPS is unreachable). */
+        fun fetchObsStatus(baseUrl: String, token: String): JSONObject? =
+            try {
+                http(baseUrl.trimEnd('/') + "/api/turboirl/obs", token, null)
+            } catch (_: Exception) {
+                null
+            }
+
+        private fun http(url: String, token: String, body: String?): JSONObject? {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = if (body != null) "POST" else "GET"
+                connectTimeout = 5000
+                readTimeout = 8000
+                setRequestProperty("Authorization", "Bearer $token")
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+            }
+            try {
+                if (body != null) conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode != 200) return null
+                return JSONObject(conn.inputStream.bufferedReader().readText())
+            } finally {
+                conn.disconnect()
+            }
+        }
     }
 }

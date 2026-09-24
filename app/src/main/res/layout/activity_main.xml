@@ -100,6 +100,33 @@
             android:inputType="textVisiblePassword|textNoSuggestions"
             android:singleLine="true" />
 
+        <TextView
+            android:id="@+id/obsStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="OBS PC : …" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/obsStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Lancer le stream OBS" />
+
+            <Button
+                android:id="@+id/obsStop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Arrêter le stream OBS" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/toggle"
             android:layout_width="match_parent"
