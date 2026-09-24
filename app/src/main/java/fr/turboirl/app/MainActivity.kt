@@ -32,6 +32,13 @@ class MainActivity : Activity() {
     private lateinit var share: Button
     private lateinit var tethering: Button
     private lateinit var sendVps: Button
+    private lateinit var update: Button
+    private lateinit var versions: TextView
+    private lateinit var testChannel: CheckBox
+    /** Version the phone should run (from the VPS, on the chosen channel); null = unknown or up to date. */
+    @Volatile private var targetVersion: String? = null
+    @Volatile private var releaseText = ""
+    @Volatile private var downloading = false
     private lateinit var obsStart: Button
     private lateinit var obsStop: Button
     private lateinit var obsStatus: TextView
@@ -62,6 +69,9 @@ class MainActivity : Activity() {
         share = findViewById(R.id.share)
         tethering = findViewById(R.id.tethering)
         sendVps = findViewById(R.id.sendVps)
+        update = findViewById(R.id.update)
+        versions = findViewById(R.id.versions)
+        testChannel = findViewById(R.id.testChannel)
         obsStart = findViewById(R.id.obsStart)
         obsStop = findViewById(R.id.obsStop)
         obsStatus = findViewById(R.id.obsStatus)
@@ -108,6 +118,12 @@ class MainActivity : Activity() {
         share.setOnClickListener { shareLog() }
         tethering.setOnClickListener { openTetheringSettings() }
         sendVps.setOnClickListener { sendJournalToVps() }
+        update.setOnClickListener { targetVersion?.let { installUpdate(it) } }
+        testChannel.isChecked = config.testChannel
+        testChannel.setOnCheckedChangeListener { _, checked ->
+            Config.load(this).copy(testChannel = checked).save(this)
+            Thread { checkRelease() }.start()
+        }
         obsStart.setOnClickListener { confirmObs("start") }
         obsStop.setOnClickListener { confirmObs("stop") }
 
@@ -163,6 +179,7 @@ class MainActivity : Activity() {
         refresh()
         obsPolling = true
         Thread { pollObs() }.start()
+        Thread { checkRelease() }.start()
     }
 
     override fun onPause() {
@@ -190,6 +207,8 @@ class MainActivity : Activity() {
                     else "\n  commande ${c.optString("action")} en attente du PC…"
                 } ?: "") + (st?.optJSONObject("relay")?.let { r ->
                     "\nRelais VPS : " + if (r.optBoolean("ready")) "flux du téléphone reçu, ${r.optInt("readers")} lecteur(s)" else "aucun flux"
+                } ?: "") + (st?.optString("version")?.takeIf { it.isNotEmpty() }?.let { v ->
+                    "\nLogiciel PC : version $v sur ${st.optString("device")}"
                 } ?: "")
             }
             handler.post { obsStatus.text = text }
@@ -216,6 +235,105 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Non", null)
             .show()
+    }
+
+    // ---------------------------------------------------------------- versions (canal stable / test sur le VPS)
+
+    private fun installedVersion(): String =
+        try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
+
+    /** Asks the VPS which version this phone should run; the screen adapts on the UI thread. */
+    private fun checkRelease() {
+        val config = Config.load(this)
+        val token = vpsToken.text.toString().trim().ifEmpty { config.vpsToken }
+        val installed = installedVersion()
+        if (token.isEmpty()) {
+            releaseText = "Appli $installed"
+            targetVersion = null
+        } else {
+            val r = Uploader.fetchRelease(config.vpsUrl, token)
+            if (r == null) {
+                // Unreachable: nothing can be checked, so nothing is blocked (noted in the journal)
+                releaseText = "Appli $installed · versions du VPS inconnues (injoignable)"
+                if (targetVersion == null) AppLog.log("Versions : VPS injoignable, impossible de vérifier la version stable")
+                targetVersion = null
+            } else {
+                val stable = r.optJSONObject("stable")?.optString("app").orEmpty()
+                val test = r.optJSONObject("test")?.optString("app").orEmpty()
+                val wanted = if (config.testChannel) test else stable
+                releaseText = "Appli $installed · stable ${stable.ifEmpty { "-" }} · test ${test.ifEmpty { "-" }}" +
+                    (if (config.testChannel) " (canal test)" else "")
+                val newTarget = if (wanted.isNotEmpty() && wanted != installed) wanted else null
+                if (newTarget != null && newTarget != targetVersion) AppLog.log("Mise à jour disponible : $newTarget (installée $installed)")
+                targetVersion = newTarget
+            }
+        }
+        handler.post { refresh() }
+    }
+
+    /** Downloads the APK from the VPS (same token) and hands it to the Android installer: two taps for the user. */
+    private fun installUpdate(target: String) {
+        if (downloading) return
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            Toast.makeText(this, "Autorise TurboIRL à installer des applis, puis réappuie sur Mettre à jour", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        val config = Config.load(this)
+        val token = vpsToken.text.toString().trim().ifEmpty { config.vpsToken }
+        downloading = true
+        update.isEnabled = false
+        Thread {
+            var error: String? = null
+            val dir = java.io.File(filesDir, "updates").apply { mkdirs() }
+            val file = java.io.File(dir, "TurboIRL-$target.apk")
+            try {
+                val conn = (java.net.URL(config.vpsUrl.trimEnd('/') + "/api/turboirl/releases/TurboIRL-$target.apk").openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 10000
+                    readTimeout = 60000
+                    setRequestProperty("Authorization", "Bearer $token")
+                }
+                try {
+                    if (conn.responseCode != 200) throw java.io.IOException("réponse ${conn.responseCode} du VPS")
+                    val total = conn.contentLengthLong
+                    var done = 0L
+                    conn.inputStream.use { input ->
+                        file.outputStream().use { out ->
+                            val buf = ByteArray(1 shl 16)
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                done += n
+                                if (total > 0) handler.post { update.text = "Téléchargement ${done * 100 / total} %" }
+                            }
+                        }
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+                AppLog.log("Mise à jour $target téléchargée (${file.length() / 1024} Ko), installation demandée")
+            } catch (e: Exception) {
+                error = e.message ?: e.javaClass.simpleName
+                file.delete()
+            }
+            handler.post {
+                downloading = false
+                update.isEnabled = true
+                if (error != null) {
+                    update.text = "Mettre à jour vers $target"
+                    Toast.makeText(this, "Téléchargement impossible : $error", Toast.LENGTH_LONG).show()
+                } else {
+                    update.text = "Installer $target"
+                    val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
+                    startActivity(
+                        Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(uri, "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            }
+        }.start()
     }
 
     private fun startRelay() {
@@ -268,6 +386,7 @@ class MainActivity : Activity() {
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
             vpsToken = vpsToken.text.toString().trim(),
+            testChannel = testChannel.isChecked,
         ).save(this)
         RelayService.start(this)
     }
@@ -276,6 +395,13 @@ class MainActivity : Activity() {
         val service = RelayService.instance
         val running = service != null
         toggle.text = if (running) "Arrêter" else "Démarrer"
+        // Not on the wanted version: Démarrer is replaced by the update button, unless a stream is already running
+        // (never interrupt it; the update waits below the buttons)
+        val target = targetVersion
+        update.visibility = if (target != null) View.VISIBLE else View.GONE
+        toggle.visibility = if (target != null && !running) View.GONE else View.VISIBLE
+        if (target != null && !downloading) update.text = "Mettre à jour vers $target"
+        versions.text = releaseText
         for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps, vpsToken)) {
             field.isEnabled = !running
         }

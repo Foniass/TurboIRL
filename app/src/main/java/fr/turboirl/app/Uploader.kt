@@ -171,6 +171,14 @@ class Uploader(
         fun isoNow(): String =
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.ROOT).format(java.util.Date())
 
+        /** Published versions: `{ stable: { app, pc }, test: { app, pc }, files: [...] }`, or null when unreachable. */
+        fun fetchRelease(baseUrl: String, token: String): JSONObject? =
+            try {
+                http(baseUrl.trimEnd('/') + "/api/turboirl/release", token, null)
+            } catch (_: Exception) {
+                null
+            }
+
         /** Asks the PC receiver (through the VPS) to start or stop the OBS stream. Result on the calling thread's callback. */
         fun postCommand(baseUrl: String, token: String, action: String, done: (String) -> Unit) {
             Thread {

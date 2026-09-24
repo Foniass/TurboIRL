@@ -25,6 +25,23 @@
             android:text="Démarrer"
             android:textSize="18sp" />
 
+        <Button
+            android:id="@+id/update"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"
+            android:text="Mettre à jour"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/versions"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:textColor="#BBBBBB"
+            android:textSize="12sp" />
+
         <!-- ============================ État ============================ -->
         <TextView
             android:id="@+id/secStateHeader"
@@ -269,6 +286,12 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Envoyer le journal au VPS maintenant" />
+
+            <CheckBox
+                android:id="@+id/testChannel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Versions de test (dernière publiée au lieu de la stable)" />
 
             <Button
                 android:id="@+id/share"

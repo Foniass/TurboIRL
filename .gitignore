@@ -8,3 +8,5 @@ dist/
 dumps/
 .kotlin/
 __pycache__/
+pc/build/
+pc/dist/

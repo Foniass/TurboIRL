@@ -20,6 +20,8 @@ data class Config(
     /** VPS (turboirl-api): write token typed once; empty = automatic upload off. URL not in the UI. */
     val vpsToken: String,
     val vpsUrl: String,
+    /** Follow the « test » channel (latest published) instead of « stable » (promoted by Fonias). */
+    val testChannel: Boolean,
     /** Last session started by the service, so that the journal can be sent by hand after a crash. */
     val lastSession: String,
     val lastStartedAt: String,
@@ -42,6 +44,7 @@ data class Config(
             .putString("goproAddress", goproAddress)
             .putString("vpsToken", vpsToken)
             .putString("vpsUrl", vpsUrl)
+            .putBoolean("testChannel", testChannel)
             .putString("lastSession", lastSession)
             .putString("lastStartedAt", lastStartedAt)
             .apply()
@@ -83,6 +86,7 @@ data class Config(
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
                 vpsToken = p.getString("vpsToken", "").orEmpty(),
                 vpsUrl = p.getString("vpsUrl", "").orEmpty().ifEmpty { DEFAULT_VPS_URL },
+                testChannel = p.getBoolean("testChannel", false),
                 lastSession = p.getString("lastSession", "").orEmpty(),
                 lastStartedAt = p.getString("lastStartedAt", "").orEmpty(),
             )

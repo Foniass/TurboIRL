@@ -63,10 +63,16 @@ class ObsControl:
     toutes les 3 s, l'exécute sur OBS par WebSocket, l'acquitte, et publie l'état d'OBS toutes les 5 s (ouvert,
     en direct, durée, débit sortant). OBS n'est jamais exposé : le PC ne fait que tirer sur l'API."""
 
-    def __init__(self, base_url, token, dry_run=False):
+    def __init__(self, base_url, token, dry_run=False, device="", version="", receiver=None):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.dry_run = dry_run
+        self.device = device
+        self.version = version
+        self.receiver = receiver
+        self.last_status = {}      # dernier état envoyé au VPS (lu par la fenêtre du logiciel PC)
+        self.last_command = ""     # dernière commande du téléphone et son résultat
+        self.api_ok = None         # None = jamais joint, True/False = dernier appel
         self.last_id = 0
         self.last_bytes = None
         self.last_bytes_at = 0.0
@@ -109,11 +115,14 @@ class ObsControl:
                 if cmd.get("id"):
                     self.last_id = cmd["id"]
                     result = self.execute(cmd.get("action"))
+                    self.last_command = f"{cmd.get('action')} ({time.strftime('%H:%M:%S')}) : {result}"
                     log(f"commande OBS #{cmd['id']} {cmd.get('action')} (de {cmd.get('device', '?')}) : {result}")
                     self.api("POST", "/api/turboirl/command/ack", {"id": cmd["id"], "result": result})
                     self.api("POST", "/api/turboirl/obs", self.status())
                 self.failures = 0
+                self.api_ok = True
             except Exception as e:
+                self.api_ok = False
                 self.failures += 1
                 if self.failures in (1, 20, 200):  # au 1er échec, puis de loin en loin
                     log(f"commande OBS : API injoignable ({e})")
@@ -140,6 +149,10 @@ class ObsControl:
                     return "déjà en direct"
                 if self.dry_run:
                     return "stream lancé (simulation)"
+                try:
+                    self.obs_request("SetCurrentProgramScene", {"sceneName": SCENE_NAME})
+                except Exception as e:
+                    log(f"OBS : impossible de passer sur la scène « {SCENE_NAME} » ({e})")
                 self.obs_request("StartStream")
                 # OBS accepte la demande même si la sortie échoue aussitôt (clé ou service absents, encodeur en
                 # erreur) : on vérifie que le stream tourne vraiment avant de dire « lancé »
@@ -158,6 +171,13 @@ class ObsControl:
             return f"refusé par OBS ({e})"
 
     def status(self):
+        st = self._status()
+        st.update({"device": self.device, "version": self.version,
+                   "receiving": bool(self.receiver is not None and self.receiver.decoder_connected)})
+        self.last_status = st
+        return st
+
+    def _status(self):
         try:
             st = self.obs_request("GetStreamStatus")
         except Exception:
@@ -172,10 +192,23 @@ class ObsControl:
         return {"obsOpen": True, "streaming": bool(st.get("outputActive")), "timecode": st.get("outputTimecode", "")[:8], "kbps": kbps}
 
 TS_PACKET = 188
+SCENE_NAME = "TurboIRL"          # scène OBS dédiée : créée si absente, le reste de l'OBS n'est jamais touché
+MEDIA_NAME = "TurboIRL flux"     # source média qui lit le récepteur (une source existante sur la même URL est adoptée)
+
+
+LOG_LISTENERS = []   # fonctions appelées avec chaque ligne (fenêtre du logiciel PC, journal vers le VPS)
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # ffmpeg sans console quand le logiciel PC est une fenêtre
 
 
 def log(msg):
-    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+    line = time.strftime("[%H:%M:%S] ") + msg
+    if sys.stdout is not None:
+        print(line, flush=True)
+    for fn in LOG_LISTENERS:
+        try:
+            fn(line)
+        except Exception:
+            pass
 
 
 def listener(port):
@@ -205,6 +238,8 @@ class ObsOverlay:
         self.item = None       # (nom de scène, id de l'élément) où la source est posée
         self.shown = None      # état envoyé à OBS (None = inconnu)
         self.retry_at = 0.0
+        self.media_name = None
+        self.last_error = ""
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
@@ -224,26 +259,104 @@ class ObsOverlay:
         return None
 
     def connect(self):
+        """Vérifie (et répare) la scène TurboIRL : la scène, la source média sur le récepteur, le message de coupure."""
         obs = Obs()
-        item = self.find_item(obs)
-        if item is None:
-            scene = obs.request("GetCurrentProgramScene").get("currentProgramSceneName")
-            kinds = obs.request("GetInputKindList").get("inputKinds", [])
-            kind = next((k for k in ("text_gdiplus_v3", "text_gdiplus_v2", "text_gdiplus", "text_ft2_source_v2") if k in kinds), None)
-            if scene is None or kind is None:
-                raise RuntimeError("impossible de créer la source texte (pas de scène ou de source texte disponible)")
-            settings = {"text": self.text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
-                        "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
-            r = obs.request("CreateInput", {"sceneName": scene, "inputName": self.source, "inputKind": kind,
-                                            "inputSettings": settings, "sceneItemEnabled": False})
-            item = (scene, r["sceneItemId"])
-            obs.request("SetSceneItemTransform", {"sceneName": scene, "sceneItemId": item[1],
-                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
-            log(f"OBS : source texte « {self.source} » créée dans la scène « {scene} » (masquée ; texte, style et position modifiables dans OBS)")
+        fixed = []
+        scenes = [sc["sceneName"] for sc in obs.request("GetSceneList").get("scenes", [])]
+        if SCENE_NAME not in scenes:
+            obs.request("CreateScene", {"sceneName": SCENE_NAME})
+            fixed.append("scène créée")
+        fixed += self.ensure_media(obs)
+        item, changes = self.ensure_text(obs)
+        fixed += changes
         self.obs = obs
         self.item = item
         self.shown = None
-        log(f"OBS : incrustation prête, source « {self.source} » dans la scène « {item[0]} »")
+        self.set_shown(False)  # le message a pu rester affiché après un arrêt brutal
+        log(f"OBS : scène « {SCENE_NAME} » vérifiée" + (f" ({', '.join(fixed)})" if fixed else " (flux et message en place)"))
+
+    def ensure_media(self, obs):
+        """Source média « TurboIRL flux » (ou une source existante sur la même URL) dans la scène, réglée comme il faut."""
+        url = f"udp://127.0.0.1:{self.r.a.obs_port}"
+        wanted = {"is_local_file": False, "input": url, "input_format": "mpegts", "buffering_mb": 1,
+                  "reconnect_delay_sec": 1, "restart_on_activate": False, "clear_on_media_end": False,
+                  "close_when_inactive": False, "hw_decode": True}
+        fixed = []
+        name = None
+        for inp in obs.request("GetInputList", {"inputKind": "ffmpeg_source"}).get("inputs", []):
+            n = inp["inputName"]
+            settings = obs.request("GetInputSettings", {"inputName": n}).get("inputSettings", {})
+            if n == MEDIA_NAME or settings.get("input") == url:
+                name = n
+                break
+        if name is None:
+            r = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": MEDIA_NAME, "inputKind": "ffmpeg_source",
+                                            "inputSettings": wanted})
+            name, item_id = MEDIA_NAME, r["sceneItemId"]
+            fixed.append("source média créée")
+        else:
+            try:
+                item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": name})["sceneItemId"]
+            except RuntimeError:
+                item_id = obs.request("CreateSceneItem", {"sceneName": SCENE_NAME, "sourceName": name})["sceneItemId"]
+                fixed.append("source média ajoutée à la scène")
+            cur = obs.request("GetInputSettings", {"inputName": name}).get("inputSettings", {})
+            diff = {k: v for k, v in wanted.items() if cur.get(k) != v}
+            if diff:
+                obs.request("SetInputSettings", {"inputName": name, "inputSettings": diff, "overlay": True})
+                fixed.append("réglages du flux corrigés (" + ", ".join(sorted(diff)) + ")")
+        # plein cadre en gardant les proportions, tout en bas de la scène
+        video = obs.request("GetVideoSettings")
+        w, h = float(video.get("baseWidth", 1920)), float(video.get("baseHeight", 1080))
+        t = obs.request("GetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id}).get("sceneItemTransform", {})
+        want_t = {"positionX": 0.0, "positionY": 0.0, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+                  "boundsWidth": w, "boundsHeight": h}
+        if any(abs(float(t.get(k, -1)) - v) > 0.5 if isinstance(v, float) else t.get(k) != v for k, v in want_t.items()):
+            obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemTransform": want_t})
+            fixed.append("cadrage du flux corrigé")
+        if not obs.request("GetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id}).get("sceneItemEnabled", True):
+            obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": True})
+            fixed.append("flux réaffiché")
+        obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": 0})
+        self.media_name = name
+        return fixed
+
+    def ensure_text(self, obs):
+        """Message de coupure dans la scène TurboIRL, masqué, au-dessus du flux ; texte et style restent libres."""
+        fixed = []
+        try:
+            item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": self.source})["sceneItemId"]
+        except RuntimeError:
+            exists = any(i["inputName"] == self.source for i in obs.request("GetInputList").get("inputs", []))
+            if exists:
+                item_id = obs.request("CreateSceneItem", {"sceneName": SCENE_NAME, "sourceName": self.source,
+                                                          "sceneItemEnabled": False})["sceneItemId"]
+                fixed.append("message ajouté à la scène")
+            else:
+                kinds = obs.request("GetInputKindList").get("inputKinds", [])
+                kind = next((k for k in ("text_gdiplus_v3", "text_gdiplus_v2", "text_gdiplus", "text_ft2_source_v2") if k in kinds), None)
+                if kind is None:
+                    raise RuntimeError("aucune source texte disponible dans cet OBS")
+                settings = {"text": self.text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
+                            "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
+                item_id = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": self.source, "inputKind": kind,
+                                                      "inputSettings": settings, "sceneItemEnabled": False})["sceneItemId"]
+                fixed.append("message de coupure créé")
+            obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
+                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
+        cur = obs.request("GetInputSettings", {"inputName": self.source}).get("inputSettings", {})
+        if not str(cur.get("text", "")).strip():
+            obs.request("SetInputSettings", {"inputName": self.source, "inputSettings": {"text": self.text}, "overlay": True})
+            fixed.append("texte du message remis")
+        video = obs.request("GetVideoSettings")
+        t = obs.request("GetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id}).get("sceneItemTransform", {})
+        if not (0 <= float(t.get("positionX", 0)) < float(video.get("baseWidth", 1920)) and 0 <= float(t.get("positionY", 0)) < float(video.get("baseHeight", 1080))):
+            obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
+                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
+            fixed.append("message replacé en haut à gauche")
+        n = len(obs.request("GetSceneItemList", {"sceneName": SCENE_NAME}).get("sceneItems", []))
+        obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": max(n - 1, 0)})
+        return (SCENE_NAME, item_id), fixed
 
     def set_shown(self, shown):
         if self.shown == shown:
@@ -267,6 +380,7 @@ class ObsOverlay:
             except Exception as e:  # OBS fermé, source supprimée… : on réessaie sans bruit toutes les 2 s
                 if self.obs is not None or self.retry_at == 0.0:
                     log(f"OBS : incrustation indisponible ({e}), nouvel essai toutes les 2 s")
+                self.last_error = str(e)
                 self.obs = None
                 self.retry_at = time.time() + 2
             time.sleep(0.5)
@@ -331,6 +445,10 @@ class Receiver:
         self.encoder = None
         self.decoder = None
         self.decoder_had_stream = False
+        self.overlay = None            # ObsOverlay (scène OBS) une fois run() lancé
+        self.control = None            # ObsControl (commande depuis le téléphone)
+        self.window = {}               # dernières stats sur 10 s (fenêtre du logiciel PC)
+        self.stopping = False
 
     # ------------------------------------------------------------------ décodeur (sessions)
     def decoder_args(self, dump):
@@ -378,7 +496,10 @@ class Receiver:
                 log(f"session {self.session} : attente du téléphone..." + (f" (dump : {dump})" if dump else ""))
                 announced = True
             self.decoder_had_stream = False
-            p = subprocess.Popen(self.decoder_args(dump), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+            if self.stopping:
+                return
+            p = subprocess.Popen(self.decoder_args(dump), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+                                 creationflags=NO_WINDOW)
             self.decoder = p
             tv = threading.Thread(target=self.read_video_pts, args=(p.stdout, self.session), daemon=True)
             ta = threading.Thread(target=self.read_decoder_log, args=(p.stderr, self.session), daemon=True)
@@ -660,7 +781,8 @@ class Receiver:
         srv_a = listener(self.a.out_audio)
         silence = bytes(self.audio_chunk)
         while True:
-            self.encoder = subprocess.Popen(self.encoder_args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            self.encoder = subprocess.Popen(self.encoder_args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                            creationflags=NO_WINDOW)
             threading.Thread(target=self.read_encoder_log, args=(self.encoder.stderr,), daemon=True).start()
             # ffmpeg ouvre et sonde ses entrées l'une après l'autre : la vidéo part dès sa connexion, le son dès la
             # sienne, chacun dans son thread ; aucun tick n'est jamais sauté (ffmpeg horodate par comptage)
@@ -737,6 +859,9 @@ class Receiver:
                 fq = f"{self.fq_min}-{self.fq_max}"
                 unpaired = f"lignes PTS {self.pts_lines} / images {self.frames_in}, image après sa ligne au pire {self.frame_line_lag * 1000:.0f} ms"
                 gaps = f"trous son amont {self.audio_gaps} ({self.audio_gap_ms:.0f} ms)"
+                self.window = {"received": d[0], "repeated": d[2], "late": d[4], "skipped": d[5], "silence_ms": d[3] * 20,
+                               "fifo_min_ms": self.fifo_min * ms if self.fifo_max else 0, "fifo_max_ms": self.fifo_max * ms,
+                               "audio_gaps": self.audio_gaps, "audio_gap_ms": self.audio_gap_ms, "at": time.time()}
                 self.audio_gaps, self.audio_gap_ms = 0, 0.0
                 self.frame_line_lag = 0.0
                 self.fifo_min, self.fifo_max = 1 << 30, 0
@@ -757,10 +882,13 @@ class Receiver:
         if self.a.obs_overlay:
             overlay = ObsOverlay(self, self.a.obs_overlay, self.a.overlay_text, self.a.freeze_seconds)
             overlay.start()
+        self.overlay = overlay
         if not self.a.no_vps:
-            token = vps_read_token()
+            token = self.a.token or vps_read_token()
             if token:
-                ObsControl(self.a.vps_url, token, dry_run=self.a.dry_run_obs).start()
+                self.control = ObsControl(self.a.vps_url, token, dry_run=self.a.dry_run_obs, device=self.a.device,
+                                          version=self.a.version, receiver=self)
+                self.control.start()
             else:
                 log("commande OBS désactivée : pas de jeton de lecture (~/.turboirl-vps.env)")
         time.sleep(0.5)
@@ -769,14 +897,19 @@ class Receiver:
             self.run_decoder_sessions()
             time.sleep(3)  # laisse l'encodeur écouler la fin (relecture)
         finally:
-            if overlay is not None:
-                overlay.clear()
-            for p in (self.decoder, self.encoder):
-                if p and p.poll() is None:
-                    p.kill()
+            self.shutdown()
+
+    def shutdown(self):
+        """Arrêt propre (fenêtre fermée, Ctrl+C) : message de coupure masqué, ffmpeg tués."""
+        self.stopping = True
+        if self.overlay is not None:
+            self.overlay.clear()
+        for p in (self.decoder, self.encoder):
+            if p and p.poll() is None:
+                p.kill()
 
 
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default="", help="entrée ffmpeg ; par défaut le relais SRT du VPS (MediaMTX), sinon "
                     "srt://0.0.0.0:9000?mode=listener&latency=... (téléphone en direct) ou udp://... (relecture)")
@@ -811,15 +944,22 @@ def main():
     ap.add_argument("--in-audio", type=int, default=9022)
     ap.add_argument("--out-video", type=int, default=9031)
     ap.add_argument("--out-audio", type=int, default=9032)
+    ap.add_argument("--token", default="", help="jeton du VPS (relais SRT et API) ; défaut : ~/.turboirl-vps.env")
+    ap.add_argument("--device", default="", help="nom de ce PC dans l'état publié au VPS")
+    ap.add_argument("--version", default="", help="version du logiciel PC publiée au VPS")
+    a = ap.parse_args(argv)
+    if not a.source:
+        token = a.token or vps_read_token()
+        if not token:
+            sys.exit("pas de --source et pas de jeton (~/.turboirl-vps.env ou --token) pour le relais du VPS")
+        a.source = relay_source(a, token)
+        log(f"lecture du relais SRT du VPS : srt://{a.relay_host}:{a.relay_port} (latence {a.relay_latency_ms} ms)")
+    return a
+
+
+def main():
     try:
-        a = ap.parse_args()
-        if not a.source:
-            token = vps_read_token()
-            if not token:
-                sys.exit("pas de --source et pas de jeton de lecture (~/.turboirl-vps.env) pour le relais du VPS")
-            a.source = relay_source(a, token)
-            log(f"lecture du relais SRT du VPS : srt://{a.relay_host}:{a.relay_port} (latence {a.relay_latency_ms} ms)")
-        Receiver(a).run()
+        Receiver(parse_args()).run()
     except KeyboardInterrupt:
         pass
 
