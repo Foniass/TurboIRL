@@ -243,18 +243,22 @@ class GoProController(
                     "${entries.mapNotNull { it.string(1) }.take(6).joinToString()})"
             )
         val flags = entry.int(5) ?: 0
+        // Band and signal as the camera sees the hotspot (ScanEntry: 2 = bars out of 5, 4 = frequency in MHz):
+        // 24/09 the camera-to-phone link stalled 1 to 10 s with the phone on the handlebar, band unknown
+        val seen = "vu par la caméra à ${entry.int(4)?.let { if (it > 4000) "5 GHz" else "2,4 GHz" } ?: "? GHz"}" +
+            "${entry.int(4)?.let { " ($it MHz)" } ?: ""}, signal ${entry.int(2) ?: "?"}/5"
         if (flags and FLAG_ASSOCIATED != 0) {
-            logger.log("GoPro : déjà connectée au hotspot")
+            logger.log("GoPro : déjà connectée au hotspot ($seen)")
             return
         }
         val resp = if (flags and FLAG_CONFIGURED != 0) {
-            logger.log("GoPro : connexion au hotspot (réseau connu)")
+            logger.log("GoPro : connexion au hotspot (réseau connu, $seen)")
             ble.proto(
                 GoProBle.CM_NET_MGMT_COMM, GoProBle.FEATURE_NETWORK, ACT_CONNECT, ACT_CONNECT_RSP,
                 Proto.Writer().string(1, settings.ssid).toByteArray(),
             )
         } else {
-            logger.log("GoPro : enregistrement du hotspot dans la caméra")
+            logger.log("GoPro : enregistrement du hotspot dans la caméra ($seen)")
             ble.proto(
                 GoProBle.CM_NET_MGMT_COMM, GoProBle.FEATURE_NETWORK, ACT_CONNECT_NEW, ACT_CONNECT_NEW_RSP,
                 Proto.Writer().string(1, settings.ssid).string(2, settings.password).toByteArray(),

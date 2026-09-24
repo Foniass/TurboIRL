@@ -478,7 +478,7 @@ class Receiver:
                             if li == idx:
                                 self.frame_line_lag = max(self.frame_line_lag, time.perf_counter() - lt)
                                 break
-                        if len(self.frames) > self.fps * 5:
+                        if len(self.frames) > self.fps * 9:  # ≈ 370 Mo d'images brutes au pire
                             self.frames.popleft()  # garde-fou mémoire (décodeur très en avance sur le son : anormal)
                             self.skipped += 1
                     self.frames_in += 1
@@ -782,9 +782,11 @@ def main():
     # couvre ce cas. --max-ms : au-delà, la file son est sautée d'un coup (jamais atteint par une simple rafale : en
     # direct le téléphone peut livrer 2,5 s de son d'un coup après un blocage Wi-Fi de la caméra, et le sauter
     # coupait le son de 1,8 s) ; --slack-ms : au-dessus de réserve + marge, on rogne 20 ms par seconde.
-    ap.add_argument("--prefill-ms", type=int, default=1200)
-    ap.add_argument("--max-ms", type=int, default=5000)
-    ap.add_argument("--slack-ms", type=int, default=800)
+    # 24/09 soir (relais VPS) : la liaison caméra → téléphone (Wi-Fi du hotspot) se coupe 1 à 2 s de temps en temps,
+    # et rien ne peut tamponner ça en amont ; 2500 ms de réserve couvrent ces trous sans silence (délai +1,3 s)
+    ap.add_argument("--prefill-ms", type=int, default=2500)
+    ap.add_argument("--max-ms", type=int, default=8000)
+    ap.add_argument("--slack-ms", type=int, default=1500)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",
                     help="source texte OBS à piloter (obs-websocket) ; vide = pas d'incrustation")
     ap.add_argument("--overlay-text", default="Petite coupure, le stream revient dans un instant")
