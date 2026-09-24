@@ -128,10 +128,15 @@ class LinkMux(
         }
 
         private fun senderLoop() {
-            val dest = InetSocketAddress(address, port)
             try {
                 while (running) {
                     val (release, pkt) = outQueue.poll(200, TimeUnit.MILLISECONDS) ?: continue
+                    val addr = address ?: try {
+                        InetAddress.getByName(host).also { address = it }
+                    } catch (e: Exception) {
+                        continue  // DNS indisponible pour l'instant : le paquet est perdu, on réessaie au suivant
+                    }
+                    val dest = InetSocketAddress(addr, port)
                     val wait = release - System.nanoTime()
                     if (wait > 0) Thread.sleep(wait / 1_000_000L, (wait % 1_000_000L).toInt())
                     try {
@@ -251,7 +256,7 @@ class LinkMux(
     private var nextId = 0
     @Volatile private var running = false
     @Volatile private var libsrt: InetSocketAddress? = null
-    private lateinit var address: InetAddress
+    @Volatile private var address: InetAddress? = null   // résolu hors du thread principal (Android l'interdit dessus)
     private val returnSeen = ArrayDeque<Int>()
     private val returnSet = HashSet<Int>()
     private var audioPackets = 0L
@@ -262,7 +267,6 @@ class LinkMux(
 
     fun start() {
         running = true
-        address = InetAddress.getByName(host)
         Thread({ localLoop() }, "mux-local").apply { isDaemon = true }.start()
         Thread({ pingLoop() }, "mux-ping").apply { isDaemon = true }.start()
         watch(NetworkCapabilities.TRANSPORT_CELLULAR, KIND_CELL, "5G", request = true)

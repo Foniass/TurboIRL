@@ -111,7 +111,8 @@ class RelayService : Service() {
         try {
             linkMux.start()
         } catch (e: Exception) {
-            lastError = "Répartiteur de liens impossible : ${e.message}"
+            lastError = "Répartiteur de liens impossible : ${e.message ?: e.javaClass.simpleName}"
+            logger.log(lastError!!)
             stopSelf()
             return START_NOT_STICKY
         }
