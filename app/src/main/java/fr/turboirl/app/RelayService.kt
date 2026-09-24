@@ -257,7 +257,7 @@ class RelayService : Service() {
             val st = snap.srt
             val link = if (st.connected) {
                 "SRT sortie ${"%.0f".format(st.sendRateMbps * 1000)} kb/s, RTT ${"%.0f".format(st.rttMs)} ms, " +
-                    "en vol ${st.flightPackets} pq, retard d'envoi ${st.sendBufferMs} ms (SRT ${st.srtBufferMs} ms, ${st.sendBufferPackets} pq), " +
+                    "en vol ${st.flightPackets} pq, tampon ${st.sendBufferMs} ms/${st.sendBufferPackets} pq, " +
                     "retransmis +${st.retransmitted - lastRetrans}, perdus +${st.dropped - lastDropped}, " +
                     "saturations +${st.queueOverflows - lastOverflows}" +
                     (if (snap.srt.critical) ", VIDÉO RETENUE (son seul)" else "") +
