@@ -36,6 +36,14 @@ import urllib.request  # noqa: E402
 DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
 
 
+DEFAULT_RELAY_HOST = "turboirl.mathisjacqueline.com"
+
+
+def relay_source(a, token):
+    """Lecture du flux sur MediaMTX (VPS) : SRT en appelant, identifié par le jeton de lecture."""
+    return f"srt://{a.relay_host}:{a.relay_port}?streamid=read:turboirl:reader:{token}&latency={a.relay_latency_ms * 1000}"
+
+
 def vps_read_token():
     """Jeton de lecture de l'API du VPS : ~/.turboirl-vps.env (READ_TOKEN=…) ou TURBOIRL_READ_TOKEN."""
     t = os.environ.get("TURBOIRL_READ_TOKEN")
@@ -319,6 +327,7 @@ class Receiver:
         self.fq_min, self.fq_max = 1 << 30, 0
         self.encoder = None
         self.decoder = None
+        self.decoder_had_stream = False
 
     # ------------------------------------------------------------------ décodeur (sessions)
     def decoder_args(self, dump):
@@ -353,13 +362,19 @@ class Receiver:
         return args
 
     def run_decoder_sessions(self):
+        announced = False
         while True:
             self.session += 1
             dump = None
             if self.a.dump_dir:
                 os.makedirs(self.a.dump_dir, exist_ok=True)
                 dump = os.path.join(self.a.dump_dir, time.strftime("dump-%Y%m%d-%H%M%S.ts"))
-            log(f"session {self.session} : attente du téléphone..." + (f" (dump : {dump})" if dump else ""))
+            # Sur le relais, le décodeur est un appelant SRT : sans flux du téléphone, MediaMTX refuse la connexion
+            # et ffmpeg s'arrête aussitôt ; on réessaie toutes les 2 s sans remplir le journal
+            if not announced:
+                log(f"session {self.session} : attente du téléphone..." + (f" (dump : {dump})" if dump else ""))
+                announced = True
+            self.decoder_had_stream = False
             p = subprocess.Popen(self.decoder_args(dump), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             self.decoder = p
             tv = threading.Thread(target=self.read_video_pts, args=(p.stdout, self.session), daemon=True)
@@ -371,10 +386,12 @@ class Receiver:
             ta.join(2)
             if dump and os.path.exists(dump) and os.path.getsize(dump) < 100_000:
                 os.remove(dump)  # connexion sans flux
-            log(f"session {self.session} terminée (téléphone déconnecté), nouvelle session dans 1 s")
+            if self.decoder_had_stream:
+                log(f"session {self.session} terminée (téléphone déconnecté), nouvelle session dans 2 s")
+                announced = False
             if self.a.once:
                 return
-            time.sleep(1)
+            time.sleep(2 if self.decoder_had_stream else 5)  # sans flux : un essai toutes les 5 s suffit (journal du VPS)
 
     PTS_RE = re.compile(rb"pts_time:(-?[0-9.]+)")
 
@@ -417,7 +434,9 @@ class Receiver:
     def read_decoder_log(self, pipe, session):
         for line in iter(pipe.readline, b""):
             text = line.decode("utf-8", errors="replace").rstrip()
-            if not text or "Could not find ref with POC" in text or "Error constructing the frame RPS" in text                     or "Skipping invalid undecodable NALU" in text or "Last message repeated" in text                     or "PPS id out of range" in text or "cu_qp_delta" in text:
+            if not text or "Could not find ref with POC" in text or "Error constructing the frame RPS" in text                     or "Skipping invalid undecodable NALU" in text or "Last message repeated" in text                     or "PPS id out of range" in text or "cu_qp_delta" in text                     or (not self.decoder_had_stream and ("Connection rejected" in text or "Error opening input" in text
+                                                         or "Connection setup failure" in text or "I/O error" in text
+                                                         or "processConnectResponse" in text or "processAsyncConnectRequest" in text)):
                 continue
             log("décodeur : " + text)
 
@@ -434,6 +453,7 @@ class Receiver:
                 self.frames.clear()
                 self.frames_unanchored.clear()
                 self.line_times.clear()
+            self.decoder_had_stream = True
             log(f"session {session} : décodeur connecté (vidéo {self.w}x{self.h})")
             buf = bytearray(self.frame_bytes)
             view = memoryview(buf)
@@ -745,7 +765,11 @@ class Receiver:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", required=True, help="entrée ffmpeg : srt://0.0.0.0:9000?mode=listener&latency=... ou udp://...")
+    ap.add_argument("--source", default="", help="entrée ffmpeg ; par défaut le relais SRT du VPS (MediaMTX), sinon "
+                    "srt://0.0.0.0:9000?mode=listener&latency=... (téléphone en direct) ou udp://... (relecture)")
+    ap.add_argument("--relay-host", default=DEFAULT_RELAY_HOST)
+    ap.add_argument("--relay-port", type=int, default=8890)
+    ap.add_argument("--relay-latency-ms", type=int, default=1000, help="latence SRT VPS → PC (le gros tampon est côté téléphone → VPS)")
     ap.add_argument("--dump-dir", default="", help="dossier des dumps bruts (vide = pas de dump)")
     ap.add_argument("--obs-port", type=int, default=9001)
     ap.add_argument("--once", action="store_true", help="une seule session de décodeur puis fin (relecture)")
@@ -773,7 +797,14 @@ def main():
     ap.add_argument("--out-video", type=int, default=9031)
     ap.add_argument("--out-audio", type=int, default=9032)
     try:
-        Receiver(ap.parse_args()).run()
+        a = ap.parse_args()
+        if not a.source:
+            token = vps_read_token()
+            if not token:
+                sys.exit("pas de --source et pas de jeton de lecture (~/.turboirl-vps.env) pour le relais du VPS")
+            a.source = relay_source(a, token)
+            log(f"lecture du relais SRT du VPS : srt://{a.relay_host}:{a.relay_port} (latence {a.relay_latency_ms} ms)")
+        Receiver(a).run()
     except KeyboardInterrupt:
         pass
 

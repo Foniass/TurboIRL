@@ -50,12 +50,24 @@ data class Config(
     companion object {
         private const val PREFS = "config"
         const val DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
+        /** MediaMTX on the VPS: the phone publishes there, the PCs read from there (no port forwarding anywhere). */
+        const val DEFAULT_SRT_HOST = "turboirl.mathisjacqueline.com"
+        const val DEFAULT_SRT_PORT = 8890
+        const val RELAY_PATH = "turboirl"
+
+        /** Stream id MediaMTX expects from the phone (user `phone`, password = the VPS write token). */
+        fun publishStreamId(vpsToken: String): String =
+            if (vpsToken.isEmpty()) "" else "publish:$RELAY_PATH:phone:$vpsToken"
 
         fun load(context: Context): Config {
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (!p.contains("relayV1")) {
+                // 2.0: the stream goes through the VPS relay; a host typed for the old direct-to-PC setup is replaced
+                p.edit().putBoolean("relayV1", true).remove("srtHost").remove("srtPort").apply()
+            }
             return Config(
-                srtHost = p.getString("srtHost", "").orEmpty(),
-                srtPort = p.getInt("srtPort", 9000),
+                srtHost = p.getString("srtHost", "").orEmpty().ifEmpty { DEFAULT_SRT_HOST },
+                srtPort = p.getInt("srtPort", DEFAULT_SRT_PORT),
                 // 12 s of SRT latency: short 4G dips are absorbed instead of freezing (≈ 15 s end to end)
                 // 12 s (v3): the 23/09 test showed a 12 s near-total outage overflowing 8 s
                 srtLatencyMs = if (p.contains("latencyV3")) p.getInt("srtLatencyMs", 12000) else 12000,

@@ -21,6 +21,8 @@ class SrtSender(
     private val logger: Logger,
     /** Send-buffer occupancy (fraction of the latency) above which video gets withheld. */
     congestOnFraction: Double = 0.6,
+    /** SRT stream id, e.g. `publish:turboirl:phone:<token>` for the MediaMTX relay on the VPS; empty = none. */
+    private val streamId: String = "",
 ) : TsSink {
 
     class Stats {
@@ -89,6 +91,7 @@ class SrtSender(
                 socket.setSockFlag(SockOpt.PAYLOADSIZE, TsMuxer.MAX_BATCH)
                 socket.setSockFlag(SockOpt.LATENCY, latencyMs)
                 socket.setSockFlag(SockOpt.CONNTIMEO, 4000)
+                if (streamId.isNotEmpty()) socket.setSockFlag(SockOpt.STREAMID, streamId)
                 socket.connect(host, port)
 
                 logger.log("SRT connecté à $host:$port (latence $latencyMs ms)")

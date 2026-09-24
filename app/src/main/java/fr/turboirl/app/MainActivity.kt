@@ -188,6 +188,8 @@ class MainActivity : Activity() {
                 } + (st?.optJSONObject("lastCommand")?.let { c ->
                     if (c.optBoolean("done")) "\n  dernière commande ${c.optString("action")} : ${c.optString("result")}"
                     else "\n  commande ${c.optString("action")} en attente du PC…"
+                } ?: "") + (st?.optJSONObject("relay")?.let { r ->
+                    "\nRelais VPS : " + if (r.optBoolean("ready")) "flux du téléphone reçu, ${r.optInt("readers")} lecteur(s)" else "aucun flux"
                 } ?: "")
             }
             handler.post { obsStatus.text = text }

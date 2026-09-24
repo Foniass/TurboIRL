@@ -96,7 +96,9 @@ class RelayService : Service() {
 
         // Fixed since 0.9 (validated outdoors): phone-side re-encode in H.265 with the bitrate controller reacting
         // first, audio re-encoded, audio priority as the last resort (video withheld at 60 % of the latency).
-        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, logger, 0.6)
+        val streamId = Config.publishStreamId(config.vpsToken)
+        if (streamId.isEmpty()) logger.log("Pas de jeton VPS : le relais SRT du VPS refusera le flux (jeton à saisir dans l'écran)")
+        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, logger, 0.6, streamId)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         flvRelay.trickleKeyframes = true
         val server = RtmpServer(config.rtmpPort, flvRelay, logger)

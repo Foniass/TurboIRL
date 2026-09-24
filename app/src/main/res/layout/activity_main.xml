@@ -100,18 +100,18 @@
         <TextView
             android:id="@+id/secDestHeader"
             style="@style/SectionHeader"
-            android:text="Destination (le PC avec OBS)" />
+            android:text="Serveur SRT (relais du VPS)" />
 
         <LinearLayout
             android:id="@+id/secDestBody"
             style="@style/SectionBody">
 
             <LinearLayout style="@style/FieldRow">
-                <TextView style="@style/FieldLabel" android:text="Adresse du PC" />
+                <TextView style="@style/FieldLabel" android:text="Adresse du serveur" />
                 <EditText
                     android:id="@+id/srtHost"
                     style="@style/FieldInput"
-                    android:hint="IP ou nom DynDNS"
+                    android:hint="turboirl.mathisjacqueline.com"
                     android:inputType="textPassword" />
             </LinearLayout>
 
@@ -120,7 +120,7 @@
                 <EditText
                     android:id="@+id/srtPort"
                     style="@style/FieldInput"
-                    android:hint="9000"
+                    android:hint="8890"
                     android:inputType="number" />
             </LinearLayout>
 
