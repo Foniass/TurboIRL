@@ -28,7 +28,85 @@ import threading
 import time
 from collections import deque
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from obs import Obs  # noqa: E402
+
 TS_PACKET = 188
+
+
+class ObsOverlay:
+    """Affiche un message dans OBS (source texte) quand le viewer voit une image figée.
+
+    Le gel est jugé à la sortie du répéteur, c'est-à-dire ce que le viewer voit vraiment : les 12 s de tampon SRT
+    sont déjà passées. Une coupure 5G ou un changement de batterie GoPro donnent le même symptôme (plus aucune
+    nouvelle image), donc un seul message. La source texte est créée dans la scène courante si elle n'existe pas
+    (style modifiable ensuite dans OBS) ; seul son texte est piloté, vide quand tout va bien.
+    """
+
+    def __init__(self, receiver, source, text, freeze_s):
+        self.r = receiver
+        self.source = source
+        self.text = text
+        self.freeze_s = freeze_s
+        self.obs = None
+        self.shown = None      # état envoyé à OBS (None = inconnu)
+        self.retry_at = 0.0
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def connect(self):
+        obs = Obs()
+        inputs = [i["inputName"] for i in obs.request("GetInputList").get("inputs", [])]
+        if self.source not in inputs:
+            scene = obs.request("GetCurrentProgramScene").get("currentProgramSceneName")
+            kinds = obs.request("GetInputKindList").get("inputKinds", [])
+            kind = next((k for k in ("text_gdiplus_v3", "text_gdiplus_v2", "text_gdiplus", "text_ft2_source_v2") if k in kinds), None)
+            if scene is None or kind is None:
+                raise RuntimeError("impossible de créer la source texte (pas de scène ou de source texte disponible)")
+            settings = {"text": "", "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
+                        "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
+            r = obs.request("CreateInput", {"sceneName": scene, "inputName": self.source, "inputKind": kind, "inputSettings": settings})
+            item = r.get("sceneItemId")
+            if item is not None:
+                obs.request("SetSceneItemTransform", {"sceneName": scene, "sceneItemId": item,
+                                                      "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
+            log(f"OBS : source texte « {self.source} » créée dans la scène « {scene} » (en haut à gauche, style modifiable dans OBS)")
+        self.obs = obs
+        self.shown = None
+        log(f"OBS : incrustation prête sur la source « {self.source} »")
+
+    def set_shown(self, shown):
+        if self.shown == shown:
+            return
+        self.obs.request("SetInputSettings", {"inputName": self.source, "inputSettings": {"text": self.text if shown else ""}, "overlay": True})
+        self.shown = shown
+        since = time.perf_counter() - self.r.last_new_frame
+        log(f"OBS : message de coupure {'affiché' if shown else 'retiré'} ({since:.1f} s depuis la dernière image nouvelle)")
+
+    def loop(self):
+        while True:
+            try:
+                if self.obs is None:
+                    if time.time() < self.retry_at:
+                        time.sleep(1)
+                        continue
+                    self.connect()
+                frozen = self.r.distinct > 0 and time.perf_counter() - self.r.last_new_frame > self.freeze_s
+                self.set_shown(frozen)
+            except Exception as e:  # OBS fermé, source supprimée… : on réessaie sans bruit toutes les 10 s
+                if self.obs is not None or self.retry_at == 0.0:
+                    log(f"OBS : incrustation indisponible ({e}), nouvel essai toutes les 10 s")
+                self.obs = None
+                self.retry_at = time.time() + 10
+            time.sleep(0.5)
+
+    def clear(self):
+        try:
+            if self.obs is not None:
+                self.set_shown(False)
+        except Exception:
+            pass
 
 
 def log(msg):
@@ -84,6 +162,7 @@ class Receiver:
         self.frames_in = self.frames_out = self.repeated = self.distinct = self.late = self.skipped = 0
         self.silence_chunks = self.skipped_audio = 0
         self.sync_worst = 0.0
+        self.last_new_frame = time.perf_counter()  # dernière image nouvelle montrée (gel = rien depuis freeze_s)
         self.pts_lines = 0  # lignes « src=v » lues (doit suivre frames_in ; sinon l'appariement par rang dérive)
         self.decoder_connected = False
         self.fifo_min, self.fifo_max = 1 << 30, 0
@@ -361,6 +440,15 @@ class Receiver:
             else:
                 self.distinct += 1
                 self.skipped += new - 1
+                # Reprise réelle seulement si l'image est à peu près à l'heure (< 1 s de retard sur le son) : pendant
+                # un gel, les doublons d'avant la coupure arrivent avec plusieurs secondes de retard, par paquets (le
+                # décodeur ne les produit qu'à l'image suivante), et n'apportent rien de nouveau au viewer ; ils ne
+                # doivent pas retirer le message de coupure. Après une coupure, les vraies images ont 0,1 à 0,3 s de retard.
+                if t - pts <= 1.0:
+                    now_wall = time.perf_counter()
+                    if now_wall - self.last_new_frame > 1.0:
+                        log(f"image : reprise après {now_wall - self.last_new_frame:.1f} s d'image figée")
+                    self.last_new_frame = now_wall
             return self.latest
 
     # ------------------------------------------------------------------ sortie (encodeur)
@@ -479,12 +567,18 @@ class Receiver:
     def run(self):
         for fn in (self.video_in, self.audio_in, self.output, self.stats):
             threading.Thread(target=fn, daemon=True).start()
+        overlay = None
+        if self.a.obs_overlay:
+            overlay = ObsOverlay(self, self.a.obs_overlay, self.a.overlay_text, self.a.freeze_seconds)
+            overlay.start()
         time.sleep(0.5)
         log(f"récepteur prêt : {self.w}x{self.h} à {self.fps} i/s, son {self.rate} Hz, réserve {self.a.prefill_ms} ms")
         try:
             self.run_decoder_sessions()
             time.sleep(3)  # laisse l'encodeur écouler la fin (relecture)
         finally:
+            if overlay is not None:
+                overlay.clear()
             for p in (self.decoder, self.encoder):
                 if p and p.poll() is None:
                     p.kill()
@@ -503,6 +597,10 @@ def main():
     # téléphone écrit un PES par trame AAC : le regroupement par 16 trames vu autrefois venait du remuxage ffmpeg du dump
     ap.add_argument("--prefill-ms", type=int, default=700)
     ap.add_argument("--max-ms", type=int, default=1500)
+    ap.add_argument("--obs-overlay", default="TurboIRL coupure",
+                    help="source texte OBS à piloter (obs-websocket) ; vide = pas d'incrustation")
+    ap.add_argument("--overlay-text", default="Petite coupure, le stream revient dans un instant")
+    ap.add_argument("--freeze-seconds", type=float, default=3.0, help="image figée depuis autant de secondes → message")
     ap.add_argument("--in-video", type=int, default=9021)
     ap.add_argument("--in-audio", type=int, default=9022)
     ap.add_argument("--out-video", type=int, default=9031)
