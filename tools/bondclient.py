@@ -33,6 +33,34 @@ def log(msg):
     print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
 
 
+def data_seq(payload):
+    """Numéro de séquence d'un paquet de données SRT, None pour un paquet de contrôle."""
+    if len(payload) < 16 or payload[0] & 0x80:
+        return None
+    return struct.unpack_from("!I", payload, 0)[0] & 0x7FFFFFFF
+
+
+def nak_seqs(payload):
+    """Séquences perdues annoncées par un NAK SRT (type de contrôle 3) : liste de numéros ou d'intervalles."""
+    if len(payload) < 16 or not payload[0] & 0x80 or struct.unpack_from("!H", payload, 0)[0] & 0x7FFF != 3:
+        return []
+    out = []
+    words = struct.unpack_from("!%dI" % ((len(payload) - 16) // 4), payload, 16)
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w & 0x80000000:  # début d'intervalle, le mot suivant est la fin
+            if i + 1 < len(words):
+                a, b = w & 0x7FFFFFFF, words[i + 1] & 0x7FFFFFFF
+                if 0 <= b - a < 2000:
+                    out.extend(range(a, b + 1))
+            i += 2
+        else:
+            out.append(w)
+            i += 1
+    return out
+
+
 def retransmitted(payload):
     """Paquet de données SRT réémis (drapeau R) : à router sur le meilleur lien, jamais sur un lien suspect."""
     return len(payload) >= 16 and not payload[0] & 0x80 and bool(payload[4] & 0x04)
@@ -83,6 +111,8 @@ class Link:
         self.suspect = False
         self.just_fell = False
         self.recent = collections.deque()   # (heure, datagramme SRT) envoyés sur ce lien, pour rejeu à la chute
+        self.data_sent = collections.deque()   # (heure) des paquets de données envoyés, fenêtre de 5 s
+        self.data_lost = collections.deque()   # (heure) des pertes annoncées par NAK, fenêtre de 5 s
 
     # ---------------- pannes simulées
     def down(self, now):
@@ -161,9 +191,23 @@ class Link:
             return "dégradé"
         return "ok"
 
+    def data_loss_pct(self, now):
+        while self.data_sent and now - self.data_sent[0] > 5.0:
+            self.data_sent.popleft()
+        while self.data_lost and now - self.data_lost[0] > 5.0:
+            self.data_lost.popleft()
+        if len(self.data_sent) < 20:
+            return 0.0
+        return 100.0 * len(self.data_lost) / len(self.data_sent)
+
+    def effective_share(self, now):
+        """Part visée, réduite quand le lien perd des données (SRT le dit par ses NAK) : 5 % de pertes = moitié."""
+        loss = self.data_loss_pct(now)
+        return self.share * max(0.0, 1.0 - loss / 10.0)
+
     def score(self):
         """Pour les retransmissions : le lien le plus sûr (pertes récentes, puis RTT)."""
-        return (self.loss_pct(), self.rtt_ms)
+        return (self.loss_pct() + self.data_loss_pct(time.time()), self.rtt_ms)
 
 
 def main():
@@ -186,6 +230,7 @@ def main():
     libsrt_addr = None
     seen = collections.deque(maxlen=256)
     seen_set = set()
+    seq_link = collections.OrderedDict()   # séquence SRT → lien qui l'a portée (fenêtre récente)
     last_ping = 0.0
     last_report = time.time()
     counters = collections.Counter()
@@ -214,16 +259,23 @@ def main():
                         counters["retransmis"] += 1
                     else:
                         healthy = [l for l in usable if l.state(now) == "ok"] or usable
-                        # solde : le lien le plus en retard sur sa part prend le paquet
-                        best = min(healthy, key=lambda l: l.sent_bytes / max(l.share, 1e-6))
+                        # solde : le lien le plus en retard sur sa part (part réduite s'il perd des données) prend le paquet
+                        candidates = [l for l in healthy if l.effective_share(now) > 0] or healthy
+                        best = min(candidates, key=lambda l: l.sent_bytes / max(l.effective_share(now), 1e-6))
                         targets = [best]
                         counters["video"] += 1
+                    seq = data_seq(payload)
                     for l in targets:
                         pkt = HDR.pack(MAGIC, T_SRT, l.id, sid) + payload
                         l.sent_bytes += len(payload)
                         l.impaired_send(pkt, now)
                         if len(targets) == 1:
                             l.remember(payload, now)
+                            if seq is not None:
+                                l.data_sent.append(now)
+                                seq_link[seq] = l
+                                if len(seq_link) > 20000:
+                                    seq_link.popitem(last=False)
             else:
                 l = next(x for x in links if x.sock is s)
                 for _ in range(64):
@@ -247,6 +299,11 @@ def main():
                         seen.append(h)
                         seen_set.add(h)
                         counters["retour"] += 1
+                        for lost in nak_seqs(payload):
+                            owner = seq_link.pop(lost, None)
+                            if owner is not None:
+                                owner.data_lost.append(now)
+                                counters["pertes annoncées"] += 1
                         local.sendto(payload, libsrt_addr)
         if now - last_ping >= PING_S:
             last_ping = now
@@ -271,7 +328,7 @@ def main():
             tot = sum(l.sent_bytes for l in links) or 1
             parts = []
             for l in links:
-                parts.append(f"{l.name} {l.state(now)} RTT {l.rtt_ms:.0f} ms pertes {l.loss_pct():.0f}% "
+                parts.append(f"{l.name} {l.state(now)} RTT {l.rtt_ms:.0f} ms pertes {l.loss_pct():.0f}% (données {l.data_loss_pct(now):.1f}%) "
                              f"{l.sent_bytes / 1e6:.1f} Mo ({100 * l.sent_bytes / tot:.0f}% / cible {100 * l.share:.0f}%)"
                              + (" COUPURE" if l.down(now) else ""))
             log(" | ".join(parts) + f" | son {counters['audio']} vidéo {counters['video']} retransmis {counters['retransmis']} rejoués {counters['rejoués']} retours {counters['retour']} (+{counters['retour dupliqué']} doublons)")

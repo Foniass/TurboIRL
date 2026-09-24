@@ -153,6 +153,7 @@ class LinkMux(
             val dp = DatagramPacket(buf, buf.size)
             while (running && !socket.isClosed) {
                 try {
+                    dp.length = buf.size  // receive() shrinks the packet to the last datagram's size: reset or truncate
                     socket.receive(dp)
                 } catch (_: Exception) {
                     if (!running || socket.isClosed) return
@@ -333,8 +334,10 @@ class LinkMux(
     private fun localLoop() {
         val buf = ByteArray(2048)
         val dp = DatagramPacket(buf, buf.size)
+        var first = true
         while (running) {
             try {
+                dp.length = buf.size
                 local.receive(dp)
             } catch (_: Exception) {
                 if (!running) return
@@ -342,7 +345,15 @@ class LinkMux(
             }
             libsrt = InetSocketAddress(dp.address, dp.port)
             val payload = buf.copyOfRange(0, dp.length)
-            dispatch(payload)
+            if (first) {
+                first = false
+                logger.log("Répartiteur : premier paquet SRT reçu de libsrt (${payload.size} octets), ${links.size} lien(s)")
+            }
+            try {
+                dispatch(payload)
+            } catch (e: Exception) {
+                logger.log("Répartiteur : erreur d'envoi (${e.javaClass.simpleName}: ${e.message})")
+            }
         }
     }
 
