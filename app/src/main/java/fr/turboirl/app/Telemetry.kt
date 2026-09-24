@@ -138,6 +138,8 @@ class Telemetry(private val context: Context) {
         val loc = location?.takeIf { System.currentTimeMillis() - it.time < 15_000 }
         val t = s.transcoder?.stats
         val g = s.gopro
+        val cell = s.links.firstOrNull { it.kind == fr.turboirl.app.net.LinkMux.KIND_CELL }
+        val wifi = s.links.firstOrNull { it.kind == fr.turboirl.app.net.LinkMux.KIND_WIFI }
 
         write(
             listOf(
@@ -168,6 +170,8 @@ class Telemetry(private val context: Context) {
                 loc?.let { "%.6f".format(Locale.ROOT, it.longitude) } ?: "",
                 loc?.let { "%.0f".format(Locale.ROOT, it.speed * 3.6) } ?: "",
                 loc?.let { "%.0f".format(Locale.ROOT, it.accuracy) } ?: "",
+                cell?.state ?: "", cell?.kbps ?: "", cell?.rttMs ?: "", cell?.sharePct ?: "",
+                wifi?.state ?: "", wifi?.kbps ?: "", wifi?.rttMs ?: "", wifi?.sharePct ?: "",
             ).joinToString(",") + "\n"
         )
     }
@@ -209,6 +213,7 @@ class Telemetry(private val context: Context) {
         const val HEADER =
             "heure,srt,tampon_ms,rtt_ms,srt_sortie_kbps,retransmis,perdus,recu_kbps,envoye_kbps,video_suspendue," +
                 "enc_cible_kbps,enc_reel_kbps,enc_largeur,enc_hauteur,diviseur_cadence,images_perdues," +
-                "gopro_etat,gopro_kbps,batterie_pct,temp_c,thermique,signal_dbm,reseau,lat,lon,vitesse_kmh,precision_m"
+                "gopro_etat,gopro_kbps,batterie_pct,temp_c,thermique,signal_dbm,reseau,lat,lon,vitesse_kmh,precision_m," +
+                "lien_5g_etat,lien_5g_kbps,lien_5g_rtt,lien_5g_pct,lien_wifi_etat,lien_wifi_kbps,lien_wifi_rtt,lien_wifi_pct"
     }
 }

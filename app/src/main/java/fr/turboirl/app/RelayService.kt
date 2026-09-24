@@ -17,6 +17,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import fr.turboirl.app.gopro.GoProController
 import fr.turboirl.app.transcode.AdaptiveBitrate
+import fr.turboirl.app.net.LinkMux
 import fr.turboirl.app.transcode.AudioTranscoder
 import fr.turboirl.app.transcode.VideoTranscoder
 import fr.turboirl.core.FlvToTsRelay
@@ -40,6 +41,7 @@ class RelayService : Service() {
         val encoderTargetKbps: Int,
         val encoderOutKbps: Long,
         val srt: SrtSender.Stats,
+        val links: List<LinkMux.LinkStats>,
     )
 
     private val handler = Handler(Looper.getMainLooper())
@@ -48,6 +50,8 @@ class RelayService : Service() {
     private var rtmpServer: RtmpServer? = null
     private var relay: FlvToTsRelay? = null
     private var srtSender: SrtSender? = null
+    private var mux: LinkMux? = null
+    private var fakeCamera: FakeCamera? = null
     private var gopro: GoProController? = null
     private var transcoder: VideoTranscoder? = null
     private var abr: AdaptiveBitrate? = null
@@ -98,7 +102,21 @@ class RelayService : Service() {
         // first, audio re-encoded, audio priority as the last resort (video withheld at 60 % of the latency).
         val streamId = Config.publishStreamId(config.vpsToken)
         if (streamId.isEmpty()) logger.log("Pas de jeton VPS : le relais SRT du VPS refusera le flux (jeton à saisir dans l'écran)")
-        val sender = SrtSender(config.srtHost, config.srtPort, config.srtLatencyMs, logger, 0.6, streamId)
+        // Every network of the phone carries a part of the SRT stream to the VPS (bond service), see LinkMux
+        val impair = if (config.testChannel) mapOf(
+            LinkMux.KIND_CELL to LinkMux.Impairment.parse(config.impairCell),
+            LinkMux.KIND_WIFI to LinkMux.Impairment.parse(config.impairWifi),
+        ) else emptyMap()
+        val linkMux = LinkMux(this, config.srtHost, config.srtPort, logger, Config.linkShares(config.cellPlanGb, config.wifiPlanGb), impair)
+        try {
+            linkMux.start()
+        } catch (e: Exception) {
+            lastError = "Répartiteur de liens impossible : ${e.message}"
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        mux = linkMux
+        val sender = SrtSender("127.0.0.1", linkMux.localPort, config.srtLatencyMs, logger, 0.6, streamId)
         val flvRelay = FlvToTsRelay(sender, logger) { sender.stats.congested }
         flvRelay.trickleKeyframes = true
         val server = RtmpServer(config.rtmpPort, flvRelay, logger)
@@ -139,7 +157,8 @@ class RelayService : Service() {
             logger.log("Pas de jeton VPS : télémétrie et journal restent sur le téléphone")
         }
 
-        if (config.goproEnabled) startCamera(config, flvRelay)
+        if (config.testChannel && config.testSource) startFakeCamera(config, flvRelay)
+        else if (config.goproEnabled) startCamera(config, flvRelay)
 
         lastTickNs = System.nanoTime()
         handler.postDelayed(::tick, 1000)
@@ -180,6 +199,36 @@ class RelayService : Service() {
         logger.log("Pilotage GoPro activé (hotspot du téléphone « $ssid »)")
     }
 
+    /** Bench: the synthetic video (downloaded once from the VPS) plays in a loop in place of the camera. */
+    private fun startFakeCamera(config: Config, flvRelay: FlvToTsRelay) {
+        val file = java.io.File(java.io.File(filesDir, "bench").apply { mkdirs() }, "TurboIRL-bench.mp4")
+        Thread {
+            try {
+                if (!file.exists() || file.length() < 1_000_000) {
+                    logger.log("Source de test : téléchargement de la vidéo synthétique depuis le VPS…")
+                    val conn = (java.net.URL(config.vpsUrl.trimEnd('/') + "/api/turboirl/releases/TurboIRL-bench.mp4").openConnection() as java.net.HttpURLConnection)
+                    conn.connectTimeout = 10000
+                    conn.readTimeout = 60000
+                    conn.setRequestProperty("Authorization", "Bearer ${config.vpsToken}")
+                    try {
+                        if (conn.responseCode != 200) throw java.io.IOException("réponse ${conn.responseCode}")
+                        val tmp = java.io.File(file.path + ".part")
+                        conn.inputStream.use { i -> tmp.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
+                        if (!tmp.renameTo(file)) throw java.io.IOException("renommage impossible")
+                    } finally {
+                        conn.disconnect()
+                    }
+                    logger.log("Source de test : vidéo reçue (${file.length() / 1_000_000} Mo)")
+                }
+                if (relay === flvRelay) {
+                    fakeCamera = FakeCamera(file, flvRelay, logger).also { it.start() }
+                }
+            } catch (e: Exception) {
+                logger.log("Source de test indisponible : ${e.message ?: e.javaClass.simpleName}")
+            }
+        }.start()
+    }
+
     private fun appVersion(): String =
         try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
@@ -193,9 +242,14 @@ class RelayService : Service() {
         uploader = null
         telemetry?.stop()
         telemetry = null
+        mux?.let { logger.log(it.bilan()) }
         val server = rtmpServer
         val sender = srtSender
         val controller = gopro
+        val linkMux = mux
+        val fake = fakeCamera
+        mux = null
+        fakeCamera = null
         val tc = transcoder
         val at = audioTranscoder
         val ab = abr
@@ -212,8 +266,10 @@ class RelayService : Service() {
             tc?.release()
             at?.release()
             controller?.stop()
+            fake?.stop()
             server?.stop()
             sender?.stop()
+            linkMux?.stop()
         }.start()
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
@@ -246,6 +302,7 @@ class RelayService : Service() {
             encoderTargetKbps = abr?.targetKbps ?: 0,
             encoderOutKbps = transcoder?.let { t -> val b = t.stats.bytesOut; val r = ((b - lastEncBytes) * 8 / 1000 / seconds).toLong(); lastEncBytes = b; r } ?: 0,
             srt = sender.stats,
+            links = mux?.snapshot() ?: emptyList(),
         )
         lastInBytes = inBytes
         lastOutBytes = outBytes
@@ -262,7 +319,8 @@ class RelayService : Service() {
                     "saturations +${st.queueOverflows - lastOverflows}" +
                     (if (snap.srt.critical) ", VIDÉO RETENUE (son seul)" else "") +
                     (snap.transcoder?.let { t -> ", encodeur ${snap.encoderTargetKbps} kb/s (réel ${snap.encoderOutKbps}, ${t.stats.width}x${t.stats.height}${if (t.stats.frameDivider > 1) " 1/${t.stats.frameDivider} cadence" else ""}, entrées ${t.stats.framesIn} décodées ${t.stats.framesDecoded} reçues GL ${t.scalerFramesReceived()} dessinées ${t.scalerFramesDrawn()} sorties ${t.stats.framesOut}, attente encodeur ${t.scalerSwapWaitMs()} ms, perdues ${t.stats.framesDropped})" } ?: "") +
-                    (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "")
+                    (if (snap.videoSuspended) ", VIDÉO SUSPENDUE" else "") +
+                    (if (snap.links.isNotEmpty()) ", liens " + snap.links.joinToString(" / ") { "${it.name} ${it.state} ${it.kbps} kb/s RTT ${it.rttMs} ms pertes ${it.lossPct} % part ${it.sharePct} %" } else "")
             } else "SRT déconnecté"
             val restarts = snap.transcoder?.stats?.restarts ?: 0
             logger.log(

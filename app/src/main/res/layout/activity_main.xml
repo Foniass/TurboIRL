@@ -66,6 +66,13 @@
                 android:paddingTop="6dp"
                 android:textSize="13sp" />
 
+            <TextView
+                android:id="@+id/linksStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="6dp"
+                android:textSize="13sp" />
+
             <Button
                 android:id="@+id/tethering"
                 android:layout_width="match_parent"
@@ -149,6 +156,42 @@
                     android:hint="12000"
                     android:inputType="number" />
             </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============================ Connexions ============================ -->
+        <TextView
+            android:id="@+id/secConnHeader"
+            style="@style/SectionHeader"
+            android:text="Connexions (forfaits)" />
+
+        <LinearLayout
+            android:id="@+id/secConnBody"
+            style="@style/SectionBody">
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Forfait 5G de ce téléphone (Go)" />
+                <EditText
+                    android:id="@+id/cellPlanGb"
+                    style="@style/FieldInput"
+                    android:hint="200"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Forfait du partage de connexion (Go)" />
+                <EditText
+                    android:id="@+id/wifiPlanGb"
+                    style="@style/FieldInput"
+                    android:hint="130"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#BBBBBB"
+                android:textSize="12sp"
+                android:text="Le flux est réparti entre la 5G du téléphone et le Wi-Fi du partage de connexion de l'autre téléphone au prorata des forfaits, la qualité d'abord ; le son part toujours sur les deux. 0 = ce lien ne sert que de secours." />
         </LinearLayout>
 
         <!-- ============================ Vidéo ============================ -->
@@ -298,6 +341,50 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Partager le journal (Discord…)" />
+        </LinearLayout>
+
+        <!-- ============================ Test (canal test seulement) ============================ -->
+        <TextView
+            android:id="@+id/secTestHeader"
+            style="@style/SectionHeader"
+            android:visibility="gone"
+            android:text="Banc d'essai" />
+
+        <LinearLayout
+            android:id="@+id/secTestBody"
+            style="@style/SectionBody"
+            android:visibility="gone">
+
+            <CheckBox
+                android:id="@+id/testSource"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Source de test à la place de la GoPro (vidéo synthétique en boucle)" />
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Pannes 5G" />
+                <EditText
+                    android:id="@+id/impairCell"
+                    style="@style/FieldInput"
+                    android:hint="pertes%,délai ms,kb/s max,toutes les s,durée s"
+                    android:inputType="text" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Pannes Wi-Fi" />
+                <EditText
+                    android:id="@+id/impairWifi"
+                    style="@style/FieldInput"
+                    android:hint="ex. 5,200,0,60/8 → 5 % de pertes, +200 ms, coupure 8 s toutes les 60 s"
+                    android:inputType="text" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#BBBBBB"
+                android:textSize="12sp"
+                android:text="Format : pertes %, délai ms, débit max kb/s, période s, durée s (vide = rien). Ex. « 0,0,0,60,8 » = coupure de 8 s toutes les 60 s." />
         </LinearLayout>
 
         <CheckBox

@@ -35,6 +35,12 @@ class MainActivity : Activity() {
     private lateinit var update: Button
     private lateinit var versions: TextView
     private lateinit var testChannel: CheckBox
+    private lateinit var linksStatus: TextView
+    private lateinit var cellPlanGb: EditText
+    private lateinit var wifiPlanGb: EditText
+    private lateinit var testSource: CheckBox
+    private lateinit var impairCell: EditText
+    private lateinit var impairWifi: EditText
     /** Version the phone should run (from the VPS, on the chosen channel); null = unknown or up to date. */
     @Volatile private var targetVersion: String? = null
     @Volatile private var releaseText = ""
@@ -72,6 +78,12 @@ class MainActivity : Activity() {
         update = findViewById(R.id.update)
         versions = findViewById(R.id.versions)
         testChannel = findViewById(R.id.testChannel)
+        linksStatus = findViewById(R.id.linksStatus)
+        cellPlanGb = findViewById(R.id.cellPlanGb)
+        wifiPlanGb = findViewById(R.id.wifiPlanGb)
+        testSource = findViewById(R.id.testSource)
+        impairCell = findViewById(R.id.impairCell)
+        impairWifi = findViewById(R.id.impairWifi)
         obsStart = findViewById(R.id.obsStart)
         obsStop = findViewById(R.id.obsStop)
         obsStatus = findViewById(R.id.obsStatus)
@@ -122,8 +134,15 @@ class MainActivity : Activity() {
         testChannel.isChecked = config.testChannel
         testChannel.setOnCheckedChangeListener { _, checked ->
             Config.load(this).copy(testChannel = checked).save(this)
+            showTestSection(checked)
             Thread { checkRelease() }.start()
         }
+        cellPlanGb.setText(config.cellPlanGb.toString())
+        wifiPlanGb.setText(config.wifiPlanGb.toString())
+        testSource.isChecked = config.testSource
+        impairCell.setText(config.impairCell)
+        impairWifi.setText(config.impairWifi)
+        showTestSection(config.testChannel)
         obsStart.setOnClickListener { confirmObs("start") }
         obsStop.setOnClickListener { confirmObs("stop") }
 
@@ -143,7 +162,16 @@ class MainActivity : Activity() {
         Triple(R.id.secVideoHeader, R.id.secVideoBody, "video"),
         Triple(R.id.secGoproHeader, R.id.secGoproBody, "gopro"),
         Triple(R.id.secVpsHeader, R.id.secVpsBody, "vps"),
+        Triple(R.id.secConnHeader, R.id.secConnBody, "conn"),
+        Triple(R.id.secTestHeader, R.id.secTestBody, "test"),
     )
+
+    /** The bench section only exists on the test channel (never shown to the friend). */
+    private fun showTestSection(shown: Boolean) {
+        findViewById<View>(R.id.secTestHeader).visibility = if (shown) View.VISIBLE else View.GONE
+        val prefs = getSharedPreferences("ui", Context.MODE_PRIVATE)
+        findViewById<View>(R.id.secTestBody).visibility = if (shown && prefs.getBoolean("test", true)) View.VISIBLE else View.GONE
+    }
 
     private fun setupSections() {
         val prefs = getSharedPreferences("ui", Context.MODE_PRIVATE)
@@ -387,6 +415,11 @@ class MainActivity : Activity() {
             goproMaxKbps = maxKbps ?: 4000,
             vpsToken = vpsToken.text.toString().trim(),
             testChannel = testChannel.isChecked,
+            cellPlanGb = cellPlanGb.text.toString().toIntOrNull() ?: 0,
+            wifiPlanGb = wifiPlanGb.text.toString().toIntOrNull() ?: 0,
+            testSource = testSource.isChecked,
+            impairCell = impairCell.text.toString().trim(),
+            impairWifi = impairWifi.text.toString().trim(),
         ).save(this)
         RelayService.start(this)
     }
@@ -406,6 +439,10 @@ class MainActivity : Activity() {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
+        val links = service?.snapshot?.links.orEmpty()
+        linksStatus.text = if (links.isEmpty()) "" else "Liens : " + links.joinToString(" · ") {
+            "${it.name} ${it.state}" + (if (it.rttMs > 0) " ${it.rttMs} ms" else "") + " ${it.kbps} kb/s, ${it.sharePct} % (visé ${it.targetPct} %)" + (if (it.outage) " COUPURE SIMULÉE" else "")
+        }
         val gp = service?.snapshot?.gopro
         goproStatus.text = when {
             gp != null -> "GoPro ${gp.cameraName} : ${gp.state.label}" +

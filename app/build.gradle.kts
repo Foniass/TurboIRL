@@ -12,8 +12,8 @@ android {
         minSdk = 26
         // 34 rather than 35: no forced edge-to-edge, same foreground service rules
         targetSdk = 34
-        versionCode = 39
-        versionName = "2.4"
+        versionCode = 40
+        versionName = "2.5"
         // libsrt + OpenSSL are native: only ship the ABI of the target phone (Redmi Note 14 Pro 5G)
         ndk { abiFilters += "arm64-v8a" }
     }

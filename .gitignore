@@ -10,3 +10,4 @@ dumps/
 __pycache__/
 pc/build/
 pc/dist/
+bench/*.mp4
