@@ -70,9 +70,14 @@ class Uploader(
         }
     }
 
+    private var ticks = 0
+
     private fun tick() {
         if (stopped) return
+        ticks++
         flushTelemetry(force = false)
+        // the journal also goes up every 2 min so that a session can be followed live from the VPS
+        if (journalReason == null && ticks % 4 == 0) journalReason = "auto"
         if (journalReason != null) flushJournal()
         handler.postDelayed(::tick, TICK_MS)
     }
