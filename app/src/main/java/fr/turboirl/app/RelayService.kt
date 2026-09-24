@@ -54,6 +54,8 @@ class RelayService : Service() {
     private var audioTranscoder: AudioTranscoder? = null
     private var lastEncBytes = 0L
     private var telemetry: Telemetry? = null
+    var uploader: Uploader? = null
+        private set
     private var wakeLock: PowerManager.WakeLock? = null
 
     private var lastInBytes = 0L
@@ -122,6 +124,19 @@ class RelayService : Service() {
         lastError = null
         logger.log("Relais démarré → srt://${config.srtHost}:${config.srtPort}")
 
+        // One session per start: telemetry every 30 s and the journal to the VPS (turboirl-api)
+        val startedAt = Uploader.isoNow()
+        val session = Uploader.newSession(java.util.Date())
+        config.copy(lastSession = session, lastStartedAt = startedAt).save(this)
+        if (config.vpsToken.isNotBlank()) {
+            uploader = Uploader(this, config.vpsUrl, config.vpsToken, session, startedAt, appVersion(), logger, tele) {
+                srtSender?.stats?.sendBufferMs ?: 0
+            }.also { it.start() }
+            logger.log("Envoi automatique vers le VPS activé (session $session)")
+        } else {
+            logger.log("Pas de jeton VPS : télémétrie et journal restent sur le téléphone")
+        }
+
         if (config.goproEnabled) startCamera(config, flvRelay)
 
         lastTickNs = System.nanoTime()
@@ -163,8 +178,17 @@ class RelayService : Service() {
         logger.log("Pilotage GoPro activé (hotspot du téléphone « $ssid »)")
     }
 
+    private fun appVersion(): String =
+        try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (_: Exception) {
+            "?"
+        }
+
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        uploader?.finish()
+        uploader = null
         telemetry?.stop()
         telemetry = null
         val server = rtmpServer

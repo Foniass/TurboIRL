@@ -91,6 +91,15 @@
             android:inputType="number"
             android:singleLine="true" />
 
+        <EditText
+            android:id="@+id/vpsToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Jeton VPS (télémétrie et journal envoyés automatiquement)"
+            android:importantForAutofill="no"
+            android:inputType="textVisiblePassword|textNoSuggestions"
+            android:singleLine="true" />
+
         <Button
             android:id="@+id/toggle"
             android:layout_width="match_parent"
@@ -214,6 +223,12 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Partager le journal (Discord…)" />
+
+        <Button
+            android:id="@+id/sendVps"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Envoyer le journal au VPS maintenant" />
 
         <TextView
             android:id="@+id/log"

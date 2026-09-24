@@ -181,16 +181,30 @@ class Telemetry(private val context: Context) {
         else -> type.toString()
     }
 
+    private val pending = ArrayList<String>()
+
+    /** Rows written since the last call (for the uploader); header and « # session » lines excluded. */
+    @Synchronized
+    fun drainPending(): List<String> {
+        val out = ArrayList(pending)
+        pending.clear()
+        return out
+    }
+
     @Synchronized
     private fun write(line: String) {
+        if (!line.startsWith("#") && !line.startsWith("heure,")) {
+            pending.add(line.trimEnd('\n'))
+            if (pending.size > 7200) pending.removeAt(0)
+        }
         try {
             file.appendText(line)
         } catch (_: IOException) {
         }
     }
 
-    private companion object {
-        const val MAX_BYTES = 4 * 1024 * 1024
+    companion object {
+        private const val MAX_BYTES = 4 * 1024 * 1024
         // diviseur_cadence : 1 = 30 i/s, 2 = 15 i/s, 6 = 5 i/s (remplace demi_cadence)
         const val HEADER =
             "heure,srt,tampon_ms,rtt_ms,srt_sortie_kbps,retransmis,perdus,recu_kbps,envoye_kbps,video_suspendue," +

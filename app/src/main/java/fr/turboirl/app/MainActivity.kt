@@ -31,6 +31,8 @@ class MainActivity : Activity() {
     private lateinit var battery: Button
     private lateinit var share: Button
     private lateinit var tethering: Button
+    private lateinit var sendVps: Button
+    private lateinit var vpsToken: EditText
     private lateinit var outMaxKbps: EditText
     private lateinit var outMaxHeight: EditText
     private lateinit var audioKbps: EditText
@@ -54,6 +56,8 @@ class MainActivity : Activity() {
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
         tethering = findViewById(R.id.tethering)
+        sendVps = findViewById(R.id.sendVps)
+        vpsToken = findViewById(R.id.vpsToken)
         outMaxKbps = findViewById(R.id.outMaxKbps)
         outMaxHeight = findViewById(R.id.outMaxHeight)
         audioKbps = findViewById(R.id.audioKbps)
@@ -79,12 +83,14 @@ class MainActivity : Activity() {
         goproPassword.setText(config.goproPassword)
         goproResolution.setText(config.goproResolution.toString())
         goproMaxKbps.setText(config.goproMaxKbps.toString())
+        vpsToken.setText(config.vpsToken)
         goproEnabled.setOnCheckedChangeListener { _, checked -> if (checked) requestBluetoothPermissions() }
 
         toggle.setOnClickListener { if (RelayService.instance != null) RelayService.stop(this) else startRelay() }
         battery.setOnClickListener { requestBatteryExemption() }
         share.setOnClickListener { shareLog() }
         tethering.setOnClickListener { openTetheringSettings() }
+        sendVps.setOnClickListener { sendJournalToVps() }
 
         val wanted = ArrayList<String>()
         if (Build.VERSION.SDK_INT >= 33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
@@ -153,6 +159,7 @@ class MainActivity : Activity() {
             // Only validated when the camera is driven by the app: keep a sane value otherwise
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
+            vpsToken = vpsToken.text.toString().trim(),
         ).save(this)
         RelayService.start(this)
     }
@@ -161,7 +168,7 @@ class MainActivity : Activity() {
         val service = RelayService.instance
         val running = service != null
         toggle.text = if (running) "Arrêter" else "Démarrer"
-        for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps)) {
+        for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps, vpsToken)) {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running
@@ -218,6 +225,26 @@ class MainActivity : Activity() {
         } ?: ""
         val pauses = if (s.videoSuspensions > 0) " · vidéo en pause ${s.videoSuspensions}× (${s.videoSuspendedMs / 1000} s)" else ""
         return "$camera\n$srt$enc\n       connexions : caméra ${s.cameraSessions} · SRT ${s.srt.connections}$pauses"
+    }
+
+    /** Journal to the VPS now: through the running service, or on its own with the last session after a crash. */
+    private fun sendJournalToVps() {
+        val token = vpsToken.text.toString().trim()
+        if (token.isEmpty()) {
+            Toast.makeText(this, "Jeton VPS manquant", Toast.LENGTH_LONG).show()
+            return
+        }
+        val config = Config.load(this).copy(vpsToken = token).also { it.save(this) }
+        val service = RelayService.instance
+        if (service?.uploader != null) {
+            service.uploader?.sendJournal("manuel")
+        } else {
+            val session = config.lastSession.ifEmpty { Uploader.newSession(java.util.Date()) }
+            val startedAt = config.lastStartedAt.ifEmpty { Uploader.isoNow() }
+            val version = try { packageManager.getPackageInfo(packageName, 0).versionName ?: "?" } catch (_: Exception) { "?" }
+            Uploader(this, config.vpsUrl, token, session, startedAt, version, fr.turboirl.core.rtmp.Logger { AppLog.log(it) }, null) { 0 }.sendJournalOnce("manuel")
+        }
+        Toast.makeText(this, "Journal en cours d'envoi (voir le journal)", Toast.LENGTH_SHORT).show()
     }
 
     private fun openTetheringSettings() {

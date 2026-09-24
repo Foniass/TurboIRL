@@ -17,6 +17,12 @@ data class Config(
     val goproResolution: Int,
     val goproMaxKbps: Int,
     val goproAddress: String,
+    /** VPS (turboirl-api): write token typed once; empty = automatic upload off. URL not in the UI. */
+    val vpsToken: String,
+    val vpsUrl: String,
+    /** Last session started by the service, so that the journal can be sent by hand after a crash. */
+    val lastSession: String,
+    val lastStartedAt: String,
 ) {
     fun save(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -34,11 +40,16 @@ data class Config(
             .putInt("goproResolution", goproResolution)
             .putInt("goproMaxKbps", goproMaxKbps)
             .putString("goproAddress", goproAddress)
+            .putString("vpsToken", vpsToken)
+            .putString("vpsUrl", vpsUrl)
+            .putString("lastSession", lastSession)
+            .putString("lastStartedAt", lastStartedAt)
             .apply()
     }
 
     companion object {
         private const val PREFS = "config"
+        const val DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
 
         fun load(context: Context): Config {
             val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -58,6 +69,10 @@ data class Config(
                 goproResolution = p.getInt("goproResolution", 720),
                 goproMaxKbps = p.getInt("goproMaxKbps", 4000),
                 goproAddress = p.getString("goproAddress", "").orEmpty(),
+                vpsToken = p.getString("vpsToken", "").orEmpty(),
+                vpsUrl = p.getString("vpsUrl", "").orEmpty().ifEmpty { DEFAULT_VPS_URL },
+                lastSession = p.getString("lastSession", "").orEmpty(),
+                lastStartedAt = p.getString("lastStartedAt", "").orEmpty(),
             )
         }
     }
