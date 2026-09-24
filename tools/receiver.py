@@ -66,6 +66,7 @@ class ObsControl:
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
+        threading.Thread(target=self.status_loop, daemon=True).start()
         log(f"commande OBS : à l'écoute de {self.base_url}" + (" (simulation, sans lancer le stream)" if self.dry_run else ""))
 
     def api(self, method, path, body=None):
@@ -74,29 +75,34 @@ class ObsControl:
         req.add_header("Authorization", "Bearer " + self.token)
         if data is not None:
             req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=8) as r:
+        with urllib.request.urlopen(req, timeout=35) as r:
             return json.loads(r.read().decode("utf-8") or "{}")
 
     def loop(self):
-        n = 0
+        """Attente longue : l'API retient la requête jusqu'à 25 s et répond dès qu'une commande est déposée."""
         while True:
             try:
-                if n % 3 == 0:
-                    cmd = self.api("GET", f"/api/turboirl/command?after={self.last_id}")
-                    if cmd.get("id"):
-                        self.last_id = cmd["id"]
-                        result = self.execute(cmd.get("action"))
-                        log(f"commande OBS #{cmd['id']} {cmd.get('action')} (de {cmd.get('device', '?')}) : {result}")
-                        self.api("POST", "/api/turboirl/command/ack", {"id": cmd["id"], "result": result})
-                if n % 5 == 0:
+                cmd = self.api("GET", f"/api/turboirl/command?after={self.last_id}&wait=25")
+                if cmd.get("id"):
+                    self.last_id = cmd["id"]
+                    result = self.execute(cmd.get("action"))
+                    log(f"commande OBS #{cmd['id']} {cmd.get('action')} (de {cmd.get('device', '?')}) : {result}")
+                    self.api("POST", "/api/turboirl/command/ack", {"id": cmd["id"], "result": result})
                     self.api("POST", "/api/turboirl/obs", self.status())
                 self.failures = 0
             except Exception as e:
                 self.failures += 1
                 if self.failures in (1, 20, 200):  # au 1er échec, puis de loin en loin
                     log(f"commande OBS : API injoignable ({e})")
-            n += 1
-            time.sleep(1)
+                time.sleep(3)
+
+    def status_loop(self):
+        while True:
+            try:
+                self.api("POST", "/api/turboirl/obs", self.status())
+            except Exception:
+                pass
+            time.sleep(3)
 
     def execute(self, action):
         if action not in ("start", "stop"):

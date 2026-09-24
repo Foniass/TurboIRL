@@ -122,7 +122,7 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    /** Every 5 s while the screen is visible: OBS state on the PC, as published by the receiver through the VPS. */
+    /** Every 2 s while the screen is visible: OBS state on the PC, as published by the receiver through the VPS. */
     private fun pollObs() {
         while (obsPolling) {
             val token = vpsToken.text.toString().trim()
@@ -143,7 +143,7 @@ class MainActivity : Activity() {
             }
             handler.post { obsStatus.text = text }
             try {
-                Thread.sleep(5000)
+                Thread.sleep(2000)
             } catch (_: InterruptedException) {
                 return
             }
