@@ -63,6 +63,21 @@ class ObsControl:
         self.last_bytes = None
         self.last_bytes_at = 0.0
         self.failures = 0
+        self.obs = None          # connexion WebSocket OBS gardée ouverte (sinon OBS journalise une connexion toutes les 3 s)
+        self.obs_lock = threading.Lock()
+
+    def obs_request(self, request_type, data=None):
+        """Requête OBS sur une connexion persistante ; rouverte si OBS a été fermé ou relancé."""
+        with self.obs_lock:
+            for attempt in (1, 2):
+                try:
+                    if self.obs is None:
+                        self.obs = Obs()
+                    return self.obs.request(request_type, data)
+                except Exception:
+                    self.obs = None
+                    if attempt == 2:
+                        raise
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
@@ -108,30 +123,35 @@ class ObsControl:
         if action not in ("start", "stop"):
             return "action inconnue"
         try:
-            obs = Obs()
+            active = self.obs_request("GetStreamStatus").get("outputActive", False)
         except Exception as e:
             return f"OBS fermé ou WebSocket inactif ({e})"
         try:
-            active = obs.request("GetStreamStatus").get("outputActive", False)
             if action == "start":
                 if active:
                     return "déjà en direct"
                 if self.dry_run:
                     return "stream lancé (simulation)"
-                obs.request("StartStream")
-                return "stream lancé"
+                self.obs_request("StartStream")
+                # OBS accepte la demande même si la sortie échoue aussitôt (clé ou service absents, encodeur en
+                # erreur) : on vérifie que le stream tourne vraiment avant de dire « lancé »
+                for _ in range(6):
+                    time.sleep(0.5)
+                    if self.obs_request("GetStreamStatus").get("outputActive", False):
+                        return "stream lancé"
+                return "OBS n'a pas pu démarrer le stream (service / clé de stream réglés dans OBS ?)"
             if not active:
                 return "déjà arrêté"
             if self.dry_run:
                 return "stream arrêté (simulation)"
-            obs.request("StopStream")
+            self.obs_request("StopStream")
             return "stream arrêté"
         except Exception as e:
             return f"refusé par OBS ({e})"
 
     def status(self):
         try:
-            st = Obs().request("GetStreamStatus")
+            st = self.obs_request("GetStreamStatus")
         except Exception:
             self.last_bytes = None
             return {"obsOpen": False, "streaming": False, "timecode": "", "kbps": 0}
