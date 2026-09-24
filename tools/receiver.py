@@ -322,6 +322,9 @@ class Receiver:
         self.sync_worst = 0.0
         self.last_new_frame = time.perf_counter()  # dernière image nouvelle montrée (gel = rien depuis freeze_s)
         self.pts_lines = 0  # lignes « src=v » lues (doit suivre frames_in ; sinon l'appariement par rang dérive)
+        self.audio_last_pts = {}       # session → PTS du dernier bloc audio (détection des trous amont)
+        self.audio_gaps = 0
+        self.audio_gap_ms = 0.0
         self.decoder_connected = False
         self.fifo_min, self.fifo_max = 1 << 30, 0
         self.fq_min, self.fq_max = 1 << 30, 0
@@ -429,6 +432,14 @@ class Receiver:
             elif line.startswith(b"src=a"):
                 if session not in self.audio_session_first_pts:
                     self.audio_session_first_pts[session] = pending
+                # saut d'horodatage entre deux blocs audio : du son perdu en amont (SRT), comblé en silence par
+                # aresample=async, invisible sinon dans les compteurs (le son sort continu, mais troué)
+                last = self.audio_last_pts.get(session)
+                if last is not None and pending - last > 0.06:
+                    with self.lock:
+                        self.audio_gaps += 1
+                        self.audio_gap_ms += (pending - last) * 1000
+                self.audio_last_pts[session] = pending
             pending = None
 
     def read_decoder_log(self, pipe, session):
@@ -725,6 +736,8 @@ class Receiver:
                 fifo = f"{self.fifo_min * ms:.0f}-{self.fifo_max * ms:.0f} ms" if self.fifo_max else "vide"
                 fq = f"{self.fq_min}-{self.fq_max}"
                 unpaired = f"lignes PTS {self.pts_lines} / images {self.frames_in}, image après sa ligne au pire {self.frame_line_lag * 1000:.0f} ms"
+                gaps = f"trous son amont {self.audio_gaps} ({self.audio_gap_ms:.0f} ms)"
+                self.audio_gaps, self.audio_gap_ms = 0, 0.0
                 self.frame_line_lag = 0.0
                 self.fifo_min, self.fifo_max = 1 << 30, 0
                 self.fq_min, self.fq_max = 1 << 30, 0
@@ -733,7 +746,7 @@ class Receiver:
             log(
                 f"10 s : images reçues {d[0]}, envoyées {d[1]} (répétées {d[2]}, en retard {d[4]}, sautées {d[5]}), "
                 f"file image {fq}, file son {fifo}, silence inséré {d[3] * 20} ms, "
-                f"son sauté {self.skipped_audio * ms:.0f} ms au total, image en retard sur le son au pire {worst * 1000:.0f} ms, {unpaired}, "
+                f"son sauté {self.skipped_audio * ms:.0f} ms au total, {gaps}, image en retard sur le son au pire {worst * 1000:.0f} ms, {unpaired}, "
                 f"décodeur {'connecté' if self.decoder_connected else 'absent'}"
             )
 
