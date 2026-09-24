@@ -34,13 +34,26 @@ from obs import Obs  # noqa: E402
 TS_PACKET = 188
 
 
+def log(msg):
+    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+
+
+def listener(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", port))
+    s.listen(1)
+    return s
+
+
 class ObsOverlay:
-    """Affiche un message dans OBS (source texte) quand le viewer voit une image figée.
+    """Affiche/masque une source OBS (texte « TurboIRL coupure ») quand le viewer voit une image figée.
 
     Le gel est jugé à la sortie du répéteur, c'est-à-dire ce que le viewer voit vraiment : les 12 s de tampon SRT
     sont déjà passées. Une coupure 5G ou un changement de batterie GoPro donnent le même symptôme (plus aucune
-    nouvelle image), donc un seul message. La source texte est créée dans la scène courante si elle n'existe pas
-    (style modifiable ensuite dans OBS) ; seul son texte est piloté, vide quand tout va bien.
+    nouvelle image), donc un seul message. La source est cherchée dans les scènes ; si elle n'existe pas, elle
+    est créée dans la scène courante avec un texte par défaut. Ensuite seule sa visibilité est pilotée : texte,
+    police, position, animations se règlent librement dans OBS.
     """
 
     def __init__(self, receiver, source, text, freeze_s):
@@ -49,40 +62,57 @@ class ObsOverlay:
         self.text = text
         self.freeze_s = freeze_s
         self.obs = None
+        self.item = None       # (nom de scène, id de l'élément) où la source est posée
         self.shown = None      # état envoyé à OBS (None = inconnu)
         self.retry_at = 0.0
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
 
+    def find_item(self, obs):
+        """(scène, id) de la source : scène courante d'abord, puis toutes les scènes ; None si absente."""
+        scenes = [obs.request("GetCurrentProgramScene").get("currentProgramSceneName")]
+        scenes += [sc["sceneName"] for sc in obs.request("GetSceneList").get("scenes", []) if sc["sceneName"] not in scenes]
+        for scene in scenes:
+            if not scene:
+                continue
+            try:
+                r = obs.request("GetSceneItemId", {"sceneName": scene, "sourceName": self.source})
+                return scene, r["sceneItemId"]
+            except RuntimeError:
+                continue
+        return None
+
     def connect(self):
         obs = Obs()
-        inputs = [i["inputName"] for i in obs.request("GetInputList").get("inputs", [])]
-        if self.source not in inputs:
+        item = self.find_item(obs)
+        if item is None:
             scene = obs.request("GetCurrentProgramScene").get("currentProgramSceneName")
             kinds = obs.request("GetInputKindList").get("inputKinds", [])
             kind = next((k for k in ("text_gdiplus_v3", "text_gdiplus_v2", "text_gdiplus", "text_ft2_source_v2") if k in kinds), None)
             if scene is None or kind is None:
                 raise RuntimeError("impossible de créer la source texte (pas de scène ou de source texte disponible)")
-            settings = {"text": "", "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
+            settings = {"text": self.text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
                         "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
-            r = obs.request("CreateInput", {"sceneName": scene, "inputName": self.source, "inputKind": kind, "inputSettings": settings})
-            item = r.get("sceneItemId")
-            if item is not None:
-                obs.request("SetSceneItemTransform", {"sceneName": scene, "sceneItemId": item,
-                                                      "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
-            log(f"OBS : source texte « {self.source} » créée dans la scène « {scene} » (en haut à gauche, style modifiable dans OBS)")
+            r = obs.request("CreateInput", {"sceneName": scene, "inputName": self.source, "inputKind": kind,
+                                            "inputSettings": settings, "sceneItemEnabled": False})
+            item = (scene, r["sceneItemId"])
+            obs.request("SetSceneItemTransform", {"sceneName": scene, "sceneItemId": item[1],
+                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
+            log(f"OBS : source texte « {self.source} » créée dans la scène « {scene} » (masquée ; texte, style et position modifiables dans OBS)")
         self.obs = obs
+        self.item = item
         self.shown = None
-        log(f"OBS : incrustation prête sur la source « {self.source} »")
+        log(f"OBS : incrustation prête, source « {self.source} » dans la scène « {item[0]} »")
 
     def set_shown(self, shown):
         if self.shown == shown:
             return
-        self.obs.request("SetInputSettings", {"inputName": self.source, "inputSettings": {"text": self.text if shown else ""}, "overlay": True})
+        scene, item_id = self.item
+        self.obs.request("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": item_id, "sceneItemEnabled": shown})
         self.shown = shown
         since = time.perf_counter() - self.r.last_new_frame
-        log(f"OBS : message de coupure {'affiché' if shown else 'retiré'} ({since:.1f} s depuis la dernière image nouvelle)")
+        log(f"OBS : message de coupure {'affiché' if shown else 'masqué'} ({since:.1f} s depuis la dernière image nouvelle)")
 
     def loop(self):
         while True:
@@ -94,11 +124,11 @@ class ObsOverlay:
                     self.connect()
                 frozen = self.r.distinct > 0 and time.perf_counter() - self.r.last_new_frame > self.freeze_s
                 self.set_shown(frozen)
-            except Exception as e:  # OBS fermé, source supprimée… : on réessaie sans bruit toutes les 10 s
+            except Exception as e:  # OBS fermé, source supprimée… : on réessaie sans bruit toutes les 2 s
                 if self.obs is not None or self.retry_at == 0.0:
-                    log(f"OBS : incrustation indisponible ({e}), nouvel essai toutes les 10 s")
+                    log(f"OBS : incrustation indisponible ({e}), nouvel essai toutes les 2 s")
                 self.obs = None
-                self.retry_at = time.time() + 10
+                self.retry_at = time.time() + 2
             time.sleep(0.5)
 
     def clear(self):
@@ -107,18 +137,6 @@ class ObsOverlay:
                 self.set_shown(False)
         except Exception:
             pass
-
-
-def log(msg):
-    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
-
-
-def listener(port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("127.0.0.1", port))
-    s.listen(1)
-    return s
 
 
 class Receiver:

@@ -68,9 +68,10 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
    Pour rejouer un dump vers OBS exactement comme en direct (reproduire un incident, valider une
    correction du récepteur sans sortie terrain ; nécessite python 3) :
    Message de coupure : quand le viewer voit une image figée depuis 3 s (zone morte, changement de batterie
-   GoPro), le récepteur écrit « Petite coupure, le stream revient dans un instant » dans la source texte OBS
-   « TurboIRL coupure » (créée dans la scène courante au premier lancement, style et position modifiables
-   dans OBS) et l'efface dès que des images à l'heure reviennent. Options `--obs-overlay`, `--overlay-text`,
+   GoPro), le récepteur affiche la source OBS « TurboIRL coupure » (source texte créée masquée dans la scène
+   courante au premier lancement, avec « Petite coupure, le stream revient dans un instant » ; texte, style,
+   position et animations libres dans OBS, seule la visibilité est pilotée) et la masque dès que des images à
+   l'heure reviennent. Si la source est supprimée ou OBS fermé, il réessaie toutes les 2 s. Options `--obs-overlay`, `--overlay-text`,
    `--freeze-seconds` de `receiver.py`.
 
    ```bash
