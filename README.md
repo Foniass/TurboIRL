@@ -67,6 +67,11 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=sample_ra
    (obs-websocket, activé dans Outils → Paramètres du serveur WebSocket, sans authentification).
    Pour rejouer un dump vers OBS exactement comme en direct (reproduire un incident, valider une
    correction du récepteur sans sortie terrain ; nécessite python 3) :
+   Message de coupure : quand le viewer voit une image figée depuis 3 s (zone morte, changement de batterie
+   GoPro), le récepteur écrit « Petite coupure, le stream revient dans un instant » dans la source texte OBS
+   « TurboIRL coupure » (créée dans la scène courante au premier lancement, style et position modifiables
+   dans OBS) et l'efface dès que des images à l'heure reviennent. Options `--obs-overlay`, `--overlay-text`,
+   `--freeze-seconds` de `receiver.py`.
 
    ```bash
    powershell -ExecutionPolicy Bypass -File tools/replay.ps1 -Dump dumps/dump-20260923-181204.ts -StartSec 440 -DurationSec 60
