@@ -282,7 +282,7 @@ class Receiver:
         self.audio_tick = 0.02
         self.audio_chunk = int(self.rate * self.audio_tick) * self.bps
         self.prefill = int(self.rate * a.prefill_ms / 1000) * self.bps
-        self.slack = int(self.rate * 0.3) * self.bps
+        self.slack = int(self.rate * a.slack_ms / 1000) * self.bps
         self.max_fifo = int(self.rate * a.max_ms / 1000) * self.bps
 
         self.lock = threading.Lock()
@@ -458,7 +458,7 @@ class Receiver:
                             if li == idx:
                                 self.frame_line_lag = max(self.frame_line_lag, time.perf_counter() - lt)
                                 break
-                        if len(self.frames) > self.fps * 6:
+                        if len(self.frames) > self.fps * 5:
                             self.frames.popleft()  # garde-fou mémoire (décodeur très en avance sur le son : anormal)
                             self.skipped += 1
                     self.frames_in += 1
@@ -553,7 +553,9 @@ class Receiver:
                 self.silence_chunks += 1
                 return None
             if self.fifo_len > self.prefill + self.slack and self.ticks % 50 == 0:
-                self._drop(self.audio_chunk)  # file trop haute : on saute 20 ms une fois par seconde
+                # file trop haute (rafale absorbée) : on rogne 20 ms une fois par seconde, sans coupure audible ;
+                # le délai supplémentaire pris pendant la rafale se résorbe en quelques dizaines de secondes
+                self._drop(self.audio_chunk)
             self.ticks += 1
             return self._take(self.audio_chunk)
 
@@ -578,8 +580,9 @@ class Receiver:
                 if s == session:
                     self.sync_worst = max(self.sync_worst, t - pts)
                     # une image par tick tant que le retard reste faible (les ticks son et image ne sont pas en
-                    # phase) ; on ne rattrape en sautant que si la suivante a plus de 3 périodes de retard
-                    if self.frames and t - self.frames[0][1] < 3.0 / self.fps:
+                    # phase) ; on rattrape en sautant une image dès que la suivante a plus de 1,5 période de retard
+                    # (avec 3 périodes, un retard de 100 à 130 ms pris pendant un trou restait pour toujours)
+                    if self.frames and t - self.frames[0][1] < 1.5 / self.fps:
                         break
             if new == 0:
                 self.repeated += 1
@@ -748,11 +751,16 @@ def main():
     ap.add_argument("--once", action="store_true", help="une seule session de décodeur puis fin (relecture)")
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--fps", type=int, default=30)
-    # 700 ms : la réserve absorbe les rafales du décodeur (jusqu'à ~350 ms observées en relecture de dumps) et les
-    # rafales « son d'abord » du téléphone ; avec moins de réserve la file son se vidait (micro-silences). Le
-    # téléphone écrit un PES par trame AAC : le regroupement par 16 trames vu autrefois venait du remuxage ffmpeg du dump
-    ap.add_argument("--prefill-ms", type=int, default=700)
-    ap.add_argument("--max-ms", type=int, default=1500)
+    # Réserve de son (= avance du son sur sa lecture, donc marge dont disposent les images pour arriver à l'heure).
+    # 24/09 : après un trou d'1 s de la caméra, le décodeur ffmpeg garde 16 images (530 ms) coincées dans ses files
+    # pour le reste de la session, en plus des ~300 ms de retard normal des images sur le son ; avec 700 ms de
+    # réserve il ne restait plus de marge et une image sur trois arrivait en retard (2 min de saccades). 1200 ms
+    # couvre ce cas. --max-ms : au-delà, la file son est sautée d'un coup (jamais atteint par une simple rafale : en
+    # direct le téléphone peut livrer 2,5 s de son d'un coup après un blocage Wi-Fi de la caméra, et le sauter
+    # coupait le son de 1,8 s) ; --slack-ms : au-dessus de réserve + marge, on rogne 20 ms par seconde.
+    ap.add_argument("--prefill-ms", type=int, default=1200)
+    ap.add_argument("--max-ms", type=int, default=5000)
+    ap.add_argument("--slack-ms", type=int, default=800)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",
                     help="source texte OBS à piloter (obs-websocket) ; vide = pas d'incrustation")
     ap.add_argument("--overlay-text", default="Petite coupure, le stream revient dans un instant")

@@ -290,11 +290,16 @@ class GoProController(
             else -> 7L
         }
         val max = settings.maxKbps.coerceIn(800, 10000).toLong() // the Hero 12 accepts 800 to 10 000 kb/s
+        // Camera-side floor: after a Wi-Fi stall the camera drops to 800 kb/s, climbs back to about half the
+        // maximum and never higher (24/09: 8000 -> 800 -> 4450 kb/s for the rest of the ride). The phone re-encodes
+        // at 3500 kb/s at most, so a source below 3000 kb/s is what the viewer notices; 3000 is nothing for the
+        // hotspot link at arm's length
+        val min = minOf(3000L, max)
         val mode = Proto.Writer()
             .string(1, url)
             .bool(2, false) // no SD copy while streaming: the live is the only job (heat)
             .varint(3, window)
-            .varint(7, 800) // camera-side floor
+            .varint(7, min)
             .varint(8, max)
             .varint(9, max)
             .toByteArray()
@@ -302,7 +307,7 @@ class GoProController(
             ble.proto(GoProBle.CQ_COMMAND, GoProBle.FEATURE_COMMAND, ACT_SET_LIVESTREAM_MODE, ACT_SET_LIVESTREAM_MODE_RSP, mode)
         )
         if (r.int(1) != RESULT_SUCCESS) throw GoProBle.BleException("configuration du live refusée (${r.int(1)})")
-        logger.log("GoPro : live configuré → $url (${settings.resolution}p, max $max kb/s)")
+        logger.log("GoPro : live configuré → $url (${settings.resolution}p, $min à $max kb/s)")
 
         liveStatus = -1
         r = Proto.decode(
