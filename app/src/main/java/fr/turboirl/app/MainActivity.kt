@@ -48,7 +48,8 @@ class MainActivity : Activity() {
     private lateinit var goproStatus: TextView
     private lateinit var rtmpUrl: TextView
     private lateinit var status: TextView
-    private lateinit var log: TextView
+    private lateinit var rtmpBlock: View
+    private lateinit var showSecrets: CheckBox
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,7 +77,8 @@ class MainActivity : Activity() {
         goproStatus = findViewById(R.id.goproStatus)
         rtmpUrl = findViewById(R.id.rtmpUrl)
         status = findViewById(R.id.status)
-        log = findViewById(R.id.log)
+        rtmpBlock = findViewById(R.id.rtmpBlock)
+        showSecrets = findViewById(R.id.showSecrets)
 
         val config = Config.load(this)
         srtHost.setText(config.srtHost)
@@ -91,7 +93,15 @@ class MainActivity : Activity() {
         goproResolution.setText(config.goproResolution.toString())
         goproMaxKbps.setText(config.goproMaxKbps.toString())
         vpsToken.setText(config.vpsToken)
-        goproEnabled.setOnCheckedChangeListener { _, checked -> if (checked) requestBluetoothPermissions() }
+
+        setupSections()
+        showSecrets.setOnCheckedChangeListener { _, checked -> applySecretMask(!checked) }
+        applySecretMask(true)
+        goproEnabled.setOnCheckedChangeListener { _, checked ->
+            if (checked) requestBluetoothPermissions()
+            rtmpBlock.visibility = if (checked) View.GONE else View.VISIBLE
+        }
+        rtmpBlock.visibility = if (config.goproEnabled) View.GONE else View.VISIBLE
 
         toggle.setOnClickListener { if (RelayService.instance != null) RelayService.stop(this) else startRelay() }
         battery.setOnClickListener { requestBatteryExemption() }
@@ -107,6 +117,45 @@ class MainActivity : Activity() {
         wanted.add(Manifest.permission.READ_PHONE_STATE)
         val missing = wanted.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
+    }
+
+    // ---------------------------------------------------------------- sections dépliables (état mémorisé)
+
+    private val sections = listOf(
+        Triple(R.id.secStateHeader, R.id.secStateBody, "state"),
+        Triple(R.id.secDestHeader, R.id.secDestBody, "dest"),
+        Triple(R.id.secVideoHeader, R.id.secVideoBody, "video"),
+        Triple(R.id.secGoproHeader, R.id.secGoproBody, "gopro"),
+        Triple(R.id.secVpsHeader, R.id.secVpsBody, "vps"),
+    )
+
+    private fun setupSections() {
+        val prefs = getSharedPreferences("ui", Context.MODE_PRIVATE)
+        for ((headerId, bodyId, key) in sections) {
+            val header = findViewById<TextView>(headerId)
+            val body = findViewById<View>(bodyId)
+            val title = header.text.toString()
+            fun apply(open: Boolean) {
+                body.visibility = if (open) View.VISIBLE else View.GONE
+                header.text = (if (open) "▾  " else "▸  ") + title
+            }
+            apply(prefs.getBoolean(key, true))
+            header.setOnClickListener {
+                val open = body.visibility != View.VISIBLE
+                prefs.edit().putBoolean(key, open).apply()
+                apply(open)
+            }
+        }
+    }
+
+    /** The screen may appear on stream: address, passwords and token are shown as dots unless asked. */
+    private fun applySecretMask(masked: Boolean) {
+        val type = if (masked) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        else android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        for (f in listOf(srtHost, goproPassword, vpsToken)) {
+            f.inputType = type
+            f.setSelection(f.text.length)
+        }
     }
 
     override fun onResume() {
@@ -253,7 +302,6 @@ class MainActivity : Activity() {
             RelayService.lastError != null -> RelayService.lastError
             else -> "Arrêté"
         }
-        log.text = AppLog.recent()
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         battery.visibility = if (pm.isIgnoringBatteryOptimizations(packageName)) View.GONE else View.VISIBLE

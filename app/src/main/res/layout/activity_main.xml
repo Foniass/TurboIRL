@@ -17,252 +17,272 @@
             android:textSize="26sp"
             android:textStyle="bold" />
 
-        <TextView
-            style="@style/SectionTitle"
-            android:text="Destination SRT (le PC avec OBS)" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/srtHost"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="3"
-                android:hint="Adresse (IP ou nom DynDNS)"
-                android:importantForAutofill="no"
-                android:inputType="textUri"
-                android:singleLine="true" />
-
-            <EditText
-                android:id="@+id/srtPort"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Port"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:singleLine="true" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/srtLatency"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Latence (ms)"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:singleLine="true" />
-
-        </LinearLayout>
-
-        <EditText
-            android:id="@+id/outMaxKbps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Débit vidéo max en sortie (kb/s), ex. 3000"
-            android:importantForAutofill="no"
-            android:inputType="number"
-            android:singleLine="true" />
-
-        <EditText
-            android:id="@+id/audioKbps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Débit du son (kb/s), ex. 64"
-            android:importantForAutofill="no"
-            android:inputType="number"
-            android:singleLine="true" />
-
-        <EditText
-            android:id="@+id/outMaxHeight"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Résolution max en sortie (480 / 720 / 1080)"
-            android:importantForAutofill="no"
-            android:inputType="number"
-            android:singleLine="true" />
-
-        <EditText
-            android:id="@+id/vpsToken"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Jeton VPS (télémétrie et journal envoyés automatiquement)"
-            android:importantForAutofill="no"
-            android:inputType="textVisiblePassword|textNoSuggestions"
-            android:singleLine="true" />
-
-        <TextView
-            android:id="@+id/obsStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="OBS PC : …" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/obsStart"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Lancer le stream OBS" />
-
-            <Button
-                android:id="@+id/obsStop"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Arrêter le stream OBS" />
-        </LinearLayout>
-
         <Button
             android:id="@+id/toggle"
             android:layout_width="match_parent"
             android:layout_height="64dp"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="8dp"
             android:text="Démarrer"
             android:textSize="18sp" />
 
+        <!-- ============================ État ============================ -->
         <TextView
-            style="@style/SectionTitle"
-            android:text="Pilotage de la GoPro en Bluetooth" />
-
-        <CheckBox
-            android:id="@+id/goproEnabled"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="L'appli connecte la GoPro au hotspot du téléphone et lance le live toute seule" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/goproSsid"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Nom du hotspot du téléphone (SSID)"
-                android:importantForAutofill="no"
-                android:inputType="textNoSuggestions"
-                android:singleLine="true" />
-
-            <EditText
-                android:id="@+id/goproPassword"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Mot de passe du hotspot"
-                android:importantForAutofill="no"
-                android:inputType="textVisiblePassword"
-                android:singleLine="true" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/goproResolution"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Résolution (480/720/1080)"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:singleLine="true" />
-
-            <EditText
-                android:id="@+id/goproMaxKbps"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Débit max (kb/s)"
-                android:importantForAutofill="no"
-                android:inputType="number"
-                android:singleLine="true" />
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/tethering"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:visibility="gone"
-            android:text="Partage de connexion éteint : ouvrir les réglages" />
-
-        <TextView
-            android:id="@+id/goproStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textSize="14sp" />
-
-        <TextView
-            style="@style/SectionTitle"
-            android:text="URL à régler dans la GoPro" />
-
-        <TextView
-            android:id="@+id/rtmpUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textIsSelectable="true"
-            android:textSize="15sp" />
-
-        <TextView
-            style="@style/SectionTitle"
+            android:id="@+id/secStateHeader"
+            style="@style/SectionHeader"
             android:text="État" />
 
+        <LinearLayout
+            android:id="@+id/secStateBody"
+            style="@style/SectionBody">
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/goproStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="6dp"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/tethering"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                android:text="Partage de connexion éteint : ouvrir les réglages" />
+
+            <Button
+                android:id="@+id/battery"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Autoriser l'exécution en arrière-plan" />
+
+            <TextView
+                style="@style/SubTitle"
+                android:text="OBS sur le PC" />
+
+            <TextView
+                android:id="@+id/obsStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="13sp"
+                android:text="OBS PC : …" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/obsStart"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="4dp"
+                    android:text="Lancer OBS" />
+
+                <Button
+                    android:id="@+id/obsStop"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:text="Arrêter OBS" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============================ Destination ============================ -->
         <TextView
-            android:id="@+id/status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textSize="14sp" />
+            android:id="@+id/secDestHeader"
+            style="@style/SectionHeader"
+            android:text="Destination (le PC avec OBS)" />
 
-        <Button
-            android:id="@+id/battery"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="Autoriser l'exécution en arrière-plan" />
+        <LinearLayout
+            android:id="@+id/secDestBody"
+            style="@style/SectionBody">
 
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Adresse du PC" />
+                <EditText
+                    android:id="@+id/srtHost"
+                    style="@style/FieldInput"
+                    android:hint="IP ou nom DynDNS"
+                    android:inputType="textPassword" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Port SRT" />
+                <EditText
+                    android:id="@+id/srtPort"
+                    style="@style/FieldInput"
+                    android:hint="9000"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Latence (ms)" />
+                <EditText
+                    android:id="@+id/srtLatency"
+                    style="@style/FieldInput"
+                    android:hint="12000"
+                    android:inputType="number" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============================ Vidéo ============================ -->
         <TextView
-            style="@style/SectionTitle"
-            android:text="Journal" />
+            android:id="@+id/secVideoHeader"
+            style="@style/SectionHeader"
+            android:text="Vidéo envoyée" />
 
-        <Button
-            android:id="@+id/share"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Partager le journal (Discord…)" />
+        <LinearLayout
+            android:id="@+id/secVideoBody"
+            style="@style/SectionBody">
 
-        <Button
-            android:id="@+id/sendVps"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Envoyer le journal au VPS maintenant" />
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Débit vidéo max (kb/s)" />
+                <EditText
+                    android:id="@+id/outMaxKbps"
+                    style="@style/FieldInput"
+                    android:hint="3500"
+                    android:inputType="number" />
+            </LinearLayout>
 
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Résolution max (480/720/1080)" />
+                <EditText
+                    android:id="@+id/outMaxHeight"
+                    style="@style/FieldInput"
+                    android:hint="720"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Débit du son (kb/s)" />
+                <EditText
+                    android:id="@+id/audioKbps"
+                    style="@style/FieldInput"
+                    android:hint="64"
+                    android:inputType="number" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============================ GoPro ============================ -->
         <TextView
-            android:id="@+id/log"
+            android:id="@+id/secGoproHeader"
+            style="@style/SectionHeader"
+            android:text="GoPro" />
+
+        <LinearLayout
+            android:id="@+id/secGoproBody"
+            style="@style/SectionBody">
+
+            <CheckBox
+                android:id="@+id/goproEnabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Pilotage automatique en Bluetooth (hotspot, live)" />
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Hotspot du téléphone (nom)" />
+                <EditText
+                    android:id="@+id/goproSsid"
+                    style="@style/FieldInput"
+                    android:hint="nom exact"
+                    android:inputType="textNoSuggestions" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Mot de passe du hotspot" />
+                <EditText
+                    android:id="@+id/goproPassword"
+                    style="@style/FieldInput"
+                    android:hint="8 caractères min."
+                    android:inputType="textPassword" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Résolution caméra (480/720/1080)" />
+                <EditText
+                    android:id="@+id/goproResolution"
+                    style="@style/FieldInput"
+                    android:hint="1080"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Débit caméra max (kb/s)" />
+                <EditText
+                    android:id="@+id/goproMaxKbps"
+                    style="@style/FieldInput"
+                    android:hint="8000"
+                    android:inputType="number" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/rtmpBlock"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/SubTitle"
+                    android:text="Sans pilotage : URL à régler dans la GoPro (Quik → Live → RTMP)" />
+
+                <TextView
+                    android:id="@+id/rtmpUrl"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textIsSelectable="true"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ============================ VPS et journal ============================ -->
+        <TextView
+            android:id="@+id/secVpsHeader"
+            style="@style/SectionHeader"
+            android:text="VPS et journal" />
+
+        <LinearLayout
+            android:id="@+id/secVpsBody"
+            style="@style/SectionBody">
+
+            <LinearLayout style="@style/FieldRow">
+                <TextView style="@style/FieldLabel" android:text="Jeton VPS" />
+                <EditText
+                    android:id="@+id/vpsToken"
+                    style="@style/FieldInput"
+                    android:hint="envoi automatique de la télémétrie"
+                    android:inputType="textPassword" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/sendVps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Envoyer le journal au VPS maintenant" />
+
+            <Button
+                android:id="@+id/share"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Partager le journal (Discord…)" />
+        </LinearLayout>
+
+        <CheckBox
+            android:id="@+id/showSecrets"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textIsSelectable="true"
-            android:textSize="11sp" />
+            android:layout_marginTop="16dp"
+            android:textSize="12sp"
+            android:text="Afficher les champs masqués (adresse, mots de passe, jeton) — à décocher en stream" />
     </LinearLayout>
 </ScrollView>

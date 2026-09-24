@@ -7,3 +7,4 @@ local.properties
 dist/
 dumps/
 .kotlin/
+__pycache__/
