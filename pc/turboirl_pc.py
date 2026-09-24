@@ -299,7 +299,7 @@ class App:
                 self.set("vps", "injoignable (commandes du téléphone et journal en attente)", RED)
             st = ctl.last_status if ctl else {}
             if ov is not None and ov.obs is not None:
-                self.set("obs", f"connecté, scène « {receiver.SCENE_NAME} » vérifiée (flux « {ov.media_name} », message de coupure)", GREEN)
+                self.set("obs", f"connecté, scène « {receiver.SCENE_NAME} » vérifiée (flux « {ov.media_name} »)", GREEN)
             elif ov is not None and ov.last_error:
                 self.set("obs", "OBS fermé ou WebSocket inactif (Outils → Paramètres du serveur WebSocket)", RED)
             else:
