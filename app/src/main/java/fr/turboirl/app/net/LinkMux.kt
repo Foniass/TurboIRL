@@ -250,7 +250,8 @@ class LinkMux(
     }
 
     private val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-    private val local = DatagramSocket(InetSocketAddress(InetAddress.getLoopbackAddress(), 0))
+    // IPv4 loopback explicitly: on Android getLoopbackAddress() can be ::1, which never sees libsrt's 127.0.0.1 packets
+    private val local = DatagramSocket(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0))
     val localPort: Int get() = local.localPort
     private val sid = Random.nextInt()
     private val links = java.util.concurrent.CopyOnWriteArrayList<Link>()
@@ -277,7 +278,7 @@ class LinkMux(
             Thread.sleep(3000)
             if (running && links.isEmpty()) addLink(KIND_OTHER, "défaut", null)
         }.apply { isDaemon = true }.start()
-        logger.log("Répartiteur de liens prêt (127.0.0.1:$localPort → $host:$port), parts visées : " +
+        logger.log("Répartiteur de liens prêt (${local.localAddress.hostAddress}:$localPort → $host:$port), parts visées : " +
             shares.entries.joinToString { "${KIND_NAMES[it.key]} ${(it.value * 100).toInt()} %" })
     }
 
