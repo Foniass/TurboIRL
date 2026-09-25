@@ -12,8 +12,8 @@ android {
         minSdk = 26
         // 34 rather than 35: no forced edge-to-edge, same foreground service rules
         targetSdk = 34
-        versionCode = 52
-        versionName = "2.17"
+        versionCode = 53
+        versionName = "2.18"
         // libsrt + OpenSSL are native: only ship the ABI of the target phone (Redmi Note 14 Pro 5G)
         ndk { abiFilters += "arm64-v8a" }
     }
@@ -41,7 +41,7 @@ kotlin {
 dependencies {
     implementation(project(":core"))
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.webkit:webkit:1.11.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.github.thibaultbee.srtdroid:srtdroid-core:1.10.0")
     testImplementation("junit:junit:4.13.2")
 }

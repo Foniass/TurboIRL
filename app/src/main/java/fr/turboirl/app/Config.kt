@@ -32,6 +32,10 @@ data class Config(
     val impairWifi: String,
     /** Twitch channel whose chat is shown in the LIVE tab. */
     val twitchChannel: String,
+    /** Twitch sign-in of the built-in chat (device code flow); empty = read only. */
+    val twitchAccessToken: String,
+    val twitchRefreshToken: String,
+    val twitchLogin: String,
     /** Last session started by the service, so that the journal can be sent by hand after a crash. */
     val lastSession: String,
     val lastStartedAt: String,
@@ -61,6 +65,9 @@ data class Config(
             .putString("impairCell", impairCell)
             .putString("impairWifi", impairWifi)
             .putString("twitchChannel", twitchChannel)
+            .putString("twitchAccessToken", twitchAccessToken)
+            .putString("twitchRefreshToken", twitchRefreshToken)
+            .putString("twitchLogin", twitchLogin)
             .putString("lastSession", lastSession)
             .putString("lastStartedAt", lastStartedAt)
             .apply()
@@ -124,6 +131,9 @@ data class Config(
                 impairCell = p.getString("impairCell", "").orEmpty(),
                 impairWifi = p.getString("impairWifi", "").orEmpty(),
                 twitchChannel = p.getString("twitchChannel", "").orEmpty(),
+                twitchAccessToken = p.getString("twitchAccessToken", "").orEmpty(),
+                twitchRefreshToken = p.getString("twitchRefreshToken", "").orEmpty(),
+                twitchLogin = p.getString("twitchLogin", "").orEmpty(),
                 lastSession = p.getString("lastSession", "").orEmpty(),
                 lastStartedAt = p.getString("lastStartedAt", "").orEmpty(),
             )

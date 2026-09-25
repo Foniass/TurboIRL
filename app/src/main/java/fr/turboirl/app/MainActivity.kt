@@ -45,8 +45,16 @@ class MainActivity : Activity() {
     private lateinit var orderPrice: EditText
     private lateinit var orderGo: Button
     private lateinit var orderStatus: TextView
-    private lateinit var chat: android.webkit.WebView
+    private lateinit var chatState: TextView
+    private lateinit var chatLogin: Button
+    private lateinit var chatScroll: android.widget.ScrollView
+    private lateinit var chatLog: TextView
+    private lateinit var chatInput: EditText
+    private lateinit var chatSend: Button
     private lateinit var chatHint: TextView
+    private var irc: TwitchIrc? = null
+    private val chatLines = ArrayDeque<CharSequence>()
+    private var chatBusy = false
     private lateinit var twitchChannel: EditText
     private var chatChannel = ""
     @Volatile private var orderCurrent: org.json.JSONObject? = null
@@ -103,7 +111,12 @@ class MainActivity : Activity() {
         orderPrice = findViewById(R.id.orderPrice)
         orderGo = findViewById(R.id.orderGo)
         orderStatus = findViewById(R.id.orderStatus)
-        chat = findViewById(R.id.chat)
+        chatState = findViewById(R.id.chatState)
+        chatLogin = findViewById(R.id.chatLogin)
+        chatScroll = findViewById(R.id.chatScroll)
+        chatLog = findViewById(R.id.chatLog)
+        chatInput = findViewById(R.id.chatInput)
+        chatSend = findViewById(R.id.chatSend)
         chatHint = findViewById(R.id.chatHint)
         twitchChannel = findViewById(R.id.twitchChannel)
         cellPlanGb = findViewById(R.id.cellPlanGb)
@@ -247,11 +260,13 @@ class MainActivity : Activity() {
         obsPolling = true
         Thread { pollObs() }.start()
         Thread { checkRelease() }.start()
+        if (liveTab.visibility == View.VISIBLE) connectChat()
     }
 
     override fun onPause() {
         obsPolling = false
         handler.removeCallbacksAndMessages(null)
+        disconnectChat()
         super.onPause()
     }
 
@@ -271,24 +286,11 @@ class MainActivity : Activity() {
             }
         }
         orderGo.setOnClickListener { orderAction() }
-        val ws = chat.settings
-        ws.javaScriptEnabled = true
-        ws.domStorageEnabled = true
-        ws.mediaPlaybackRequiresUserGesture = true
-        // the Twitch popout chat (and its login page) exist on the desktop site only. The login page refuses
-        // "unsupported browsers": a desktop Chrome UA (128, then the WebView's own version) was still refused on the
-        // friend's phone (2.15, 2.16); a desktop Firefox UA is the one reported to pass from an Android WebView
-        AppLog.log("Tchat : WebView « ${ws.userAgentString} »")
-        ws.userAgentString = "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
-        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
-            // no X-Requested-With: <package> header, the classic WebView tell
-            androidx.webkit.WebSettingsCompat.setRequestedWithHeaderOriginAllowList(ws, emptySet())
-        }
-        android.webkit.CookieManager.getInstance().setAcceptCookie(true)
-        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true)
-        chat.webViewClient = android.webkit.WebViewClient()
-        chat.webChromeClient = android.webkit.WebChromeClient()
-        loadChat()
+        chatSend.setOnClickListener { sendChat() }
+        chatInput.setOnEditorActionListener { _, _, _ -> sendChat(); true }
+        chatLogin.setOnClickListener { if (Config.load(this).twitchLogin.isEmpty()) twitchSignIn() else twitchSignOut() }
+        chatLog.movementMethod = android.text.method.LinkMovementMethod.getInstance()
+        applyChatAccount()
     }
 
     private fun showTab(live: Boolean) {
@@ -300,18 +302,180 @@ class MainActivity : Activity() {
         tabSetup.setBackgroundColor(if (live) 0 else 0x33FF6D00)
         getSharedPreferences("ui", Context.MODE_PRIVATE).edit().putBoolean("liveTab", live).apply()
         if (live) {
-            loadChat()
+            connectChat()
             applyBlurButton()
+        } else {
+            disconnectChat()
         }
     }
 
-    /** Twitch popout chat of the configured channel; reloaded only when the channel changes. */
-    private fun loadChat() {
-        val channel = Config.load(this).twitchChannel.trim().trimStart('@').lowercase()
+    // ---------------------------------------------------------------- tchat Twitch intégré (IRC ; envoi avec le compte)
+
+    /** Built-in chat of the configured channel: anonymous read, or read and write once signed in. */
+    private fun connectChat() {
+        val config = Config.load(this)
+        val channel = config.twitchChannel.trim().trimStart('@').lowercase()
         chatHint.visibility = if (channel.isEmpty()) View.VISIBLE else View.GONE
-        if (channel.isEmpty() || channel == chatChannel) return
-        chatChannel = channel
-        chat.loadUrl("https://www.twitch.tv/popout/$channel/chat?popout=")
+        if (channel.isEmpty()) {
+            disconnectChat()
+            return
+        }
+        val signedIn = config.twitchLogin.isNotEmpty() && config.twitchAccessToken.isNotEmpty()
+        val wanted = channel + (if (signedIn) "@" + config.twitchLogin else "")
+        if (irc != null && wanted == chatChannel) return
+        disconnectChat()
+        chatChannel = wanted
+        chatState.text = "Tchat : connexion…"
+        val client = TwitchIrc(channel, if (signedIn) config.twitchLogin else null, if (signedIn) config.twitchAccessToken else null,
+            object : TwitchIrc.Listener {
+                override fun onMessage(m: TwitchIrc.Message) { handler.post { appendChat(m) } }
+                override fun onState(text: String) { handler.post { chatState.text = "Tchat : $text" } }
+                override fun onAuthFailed() { handler.post { refreshTwitchToken() } }
+            })
+        irc = client
+        client.connect()
+    }
+
+    private fun disconnectChat() {
+        irc?.close()
+        irc = null
+        chatChannel = ""
+    }
+
+    private fun appendChat(m: TwitchIrc.Message) {
+        val badge = when {
+            m.badges.contains("broadcaster") -> "★ "
+            m.badges.contains("moderator") -> "⚔ "
+            m.badges.contains("vip") -> "◆ "
+            else -> ""
+        }
+        val line = android.text.SpannableStringBuilder()
+        line.append(badge)
+        val start = line.length
+        line.append(m.name).append(" : ")
+        line.setSpan(android.text.style.ForegroundColorSpan(m.color), start, line.length, 0)
+        line.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, line.length, 0)
+        line.append(m.text)
+        if (m.own) line.setSpan(android.text.style.ForegroundColorSpan(0xFFDDDDDD.toInt()), start + m.name.length + 3, line.length, 0)
+        chatLines.addLast(line)
+        while (chatLines.size > 150) chatLines.removeFirst()
+        val atBottom = chatScroll.getChildAt(0).bottom <= chatScroll.height + chatScroll.scrollY + 60
+        chatLog.text = android.text.TextUtils.concat(*chatLines.flatMap { listOf(it, "\n") }.dropLast(1).toTypedArray())
+        if (atBottom) chatScroll.post { chatScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun sendChat() {
+        val text = chatInput.text.toString().trim()
+        if (text.isEmpty()) return
+        val config = Config.load(this)
+        if (config.twitchLogin.isEmpty()) {
+            Toast.makeText(this, "Connecte-toi à Twitch pour écrire", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val client = irc
+        if (client == null || !client.send(text)) {
+            Toast.makeText(this, "Tchat pas encore connecté, réessaie", Toast.LENGTH_SHORT).show()
+            return
+        }
+        chatInput.setText("")
+        appendChat(TwitchIrc.Message(config.twitchLogin, 0xFFFF6D00.toInt(), text, "", own = true))
+    }
+
+    private fun applyChatAccount() {
+        val config = Config.load(this)
+        if (TwitchAuth.CLIENT_ID.isEmpty()) {
+            chatLogin.visibility = View.GONE
+            return
+        }
+        chatLogin.visibility = View.VISIBLE
+        chatLogin.text = if (config.twitchLogin.isEmpty()) "Se connecter à Twitch" else "${config.twitchLogin} · déconnexion"
+    }
+
+    /** Device code flow: a code to confirm on twitch.tv/activate in the phone's browser, then the tokens. */
+    private fun twitchSignIn() {
+        if (chatBusy) return
+        chatBusy = true
+        Thread {
+            try {
+                val dc = TwitchAuth.startDevice()
+                handler.post {
+                    val dialog = android.app.AlertDialog.Builder(this)
+                        .setTitle("Connexion Twitch")
+                        .setMessage("Code : ${dc.userCode}\n\nOuvre Twitch, connecte-toi avec le compte de la chaîne et confirme le code. " +
+                            "Cette appli attend ici (${dc.expiresInS / 60} min max).")
+                        .setPositiveButton("Ouvrir Twitch") { _, _ ->
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(dc.verificationUri)))
+                        }
+                        .setNegativeButton("Annuler") { _, _ -> chatBusy = false }
+                        .setCancelable(false)
+                        .show()
+                    Thread {
+                        val deadline = System.currentTimeMillis() + dc.expiresInS * 1000L
+                        var tokens: TwitchAuth.Tokens? = null
+                        var error: String? = null
+                        while (chatBusy && tokens == null && System.currentTimeMillis() < deadline) {
+                            try { Thread.sleep(dc.intervalS * 1000L) } catch (_: InterruptedException) { break }
+                            try {
+                                tokens = TwitchAuth.pollDevice(dc)
+                            } catch (e: Exception) {
+                                error = e.message
+                                break
+                            }
+                        }
+                        val login = tokens?.let { t -> try { TwitchAuth.validate(t.access) } catch (_: Exception) { null } }
+                        handler.post {
+                            if (!chatBusy) return@post   // annulé
+                            chatBusy = false
+                            dialog.dismiss()
+                            if (tokens != null && login != null) {
+                                Config.load(this).copy(twitchAccessToken = tokens.access, twitchRefreshToken = tokens.refresh, twitchLogin = login).save(this)
+                                AppLog.log("Tchat : connecté à Twitch en tant que $login")
+                                Toast.makeText(this, "Connecté : $login", Toast.LENGTH_SHORT).show()
+                                applyChatAccount()
+                                connectChat()
+                            } else {
+                                Toast.makeText(this, error ?: "Connexion Twitch non confirmée", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }.start()
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    chatBusy = false
+                    Toast.makeText(this, e.message ?: "Twitch injoignable", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun twitchSignOut() {
+        Config.load(this).copy(twitchAccessToken = "", twitchRefreshToken = "", twitchLogin = "").save(this)
+        applyChatAccount()
+        connectChat()
+    }
+
+    /** Access tokens last about 4 h: on a refusal, a new pair from the refresh token, else back to read only. */
+    private fun refreshTwitchToken() {
+        val config = Config.load(this)
+        if (config.twitchRefreshToken.isEmpty()) {
+            twitchSignOut()
+            return
+        }
+        chatState.text = "Tchat : renouvellement de la connexion Twitch…"
+        Thread {
+            val t = try { TwitchAuth.refresh(config.twitchRefreshToken) } catch (_: Exception) { null }
+            handler.post {
+                if (t != null) {
+                    Config.load(this).copy(twitchAccessToken = t.access, twitchRefreshToken = t.refresh).save(this)
+                    disconnectChat()
+                    connectChat()
+                } else {
+                    AppLog.log("Tchat : connexion Twitch expirée, à refaire")
+                    Toast.makeText(this, "Connexion Twitch expirée, reconnecte-toi", Toast.LENGTH_LONG).show()
+                    twitchSignOut()
+                }
+            }
+        }.start()
     }
 
     private fun applyBlurButton() {
