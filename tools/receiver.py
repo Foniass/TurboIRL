@@ -288,6 +288,9 @@ class ObsOverlay:
         self.last_error = ""
         self.texts = {}          # nom de source texte → id d'élément dans la scène
         self.text_state = {}     # nom → (texte, visible) déjà envoyés à OBS
+        # la connexion OBS est utilisée par le thread du gel et par celui des commandes : jamais deux requêtes à la
+        # fois (25/09 : trames entremêlées, client bloqué, reconnexions en boucle qui figeaient OBS)
+        self.lock = threading.RLock()
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
@@ -421,24 +424,26 @@ class ObsOverlay:
 
     def set_text(self, name, text, shown):
         """Contenu et visibilité d'un texte des commandes, envoyés seulement s'ils changent."""
-        obs = self.obs
-        item_id = self.texts.get(name)
-        if obs is None or item_id is None:
-            return
-        prev = self.text_state.get(name)
-        if prev == (text, shown):
-            return
-        if prev is None or prev[0] != text:
-            obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": text}, "overlay": True})
-        if prev is None or prev[1] != shown:
-            obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": shown})
-        self.text_state[name] = (text, shown)
+        with self.lock:
+            obs = self.obs
+            item_id = self.texts.get(name)
+            if obs is None or item_id is None:
+                return
+            prev = self.text_state.get(name)
+            if prev == (text, shown):
+                return
+            if prev is None or prev[0] != text:
+                obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": text}, "overlay": True})
+            if prev is None or prev[1] != shown:
+                obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": shown})
+            self.text_state[name] = (text, shown)
 
     def apply_orders(self, st):
         """État des commandes (API du VPS) → textes OBS."""
         if self.obs is None or not st:
             return
-        try:
+        with self.lock:
+          try:
             goal = st.get("goal")
             total = euros(st.get("total", 0))
             if st.get("goalEnabled") and goal:
@@ -459,22 +464,24 @@ class ObsOverlay:
             else:
                 for name in ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps"):
                     self.set_text(name, self.text_state.get(name, ("", False))[0] or "-", False)
-        except Exception as e:
+          except Exception as e:
             log(f"OBS : textes des commandes indisponibles ({e})")
             self.obs = None
 
     def set_shown(self, shown):
-        if self.shown == shown:
-            return
-        scene, item_id = self.item
-        self.obs.request("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": item_id, "sceneItemEnabled": shown})
-        self.shown = shown
+        with self.lock:
+            if self.shown == shown or self.obs is None:
+                return
+            scene, item_id = self.item
+            self.obs.request("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": item_id, "sceneItemEnabled": shown})
+            self.shown = shown
         since = time.perf_counter() - self.r.last_new_frame
         log(f"OBS : message de coupure {'affiché' if shown else 'masqué'} ({since:.1f} s depuis la dernière image nouvelle)")
 
     def loop(self):
         while True:
             try:
+              with self.lock:
                 if self.obs is None:
                     if time.time() < self.retry_at:
                         time.sleep(1)
@@ -493,6 +500,7 @@ class ObsOverlay:
             time.sleep(0.5)
 
     def clear(self):
+      with self.lock:
         try:
             if self.obs is not None:
                 self.set_shown(False)

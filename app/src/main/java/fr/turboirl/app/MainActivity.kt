@@ -165,6 +165,16 @@ class MainActivity : Activity() {
             Thread { checkRelease() }.start()
         }
         twitchChannel.setText(config.twitchChannel)
+        // saved as typed: the chat needs it without pressing Démarrer (the other fields are saved at start)
+        twitchChannel.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val v = s.toString().trim().trimStart('@')
+                val c = Config.load(this@MainActivity)
+                if (c.twitchChannel != v) c.copy(twitchChannel = v).save(this@MainActivity)
+            }
+        })
         setupLive()
         cellPlanGb.setText(config.cellPlanGb.toString())
         wifiPlanGb.setText(config.wifiPlanGb.toString())
