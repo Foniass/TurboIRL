@@ -76,6 +76,7 @@ class ObsControl:
         self.version = version
         self.receiver = receiver
         self.last_status = {}      # dernier état envoyé au VPS (lu par la fenêtre du logiciel PC)
+        self.orders = None         # état des commandes de livraison (API du VPS), affiché dans OBS
         self.last_command = ""     # dernière commande du téléphone et son résultat
         self.api_ok = None         # None = jamais joint, True/False = dernier appel
         self.last_id = 0
@@ -101,6 +102,7 @@ class ObsControl:
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
         threading.Thread(target=self.status_loop, daemon=True).start()
+        threading.Thread(target=self.orders_loop, daemon=True).start()
         log(f"commande OBS : à l'écoute de {self.base_url}" + (" (simulation, sans lancer le stream)" if self.dry_run else ""))
 
     def api(self, method, path, body=None):
@@ -141,6 +143,26 @@ class ObsControl:
                 pass
             time.sleep(3)
 
+    def orders_loop(self):
+        """Commandes : relevées toutes les 3 s, textes OBS rafraîchis chaque seconde (durée en cours)."""
+        n = 0
+        while True:
+            try:
+                if n % 3 == 0:
+                    self.orders = self.api("GET", "/api/turboirl/orders")
+                ov = self.receiver.overlay if self.receiver is not None else None
+                if ov is not None:
+                    ov.apply_orders(self.orders)
+            except Exception:
+                pass
+            n += 1
+            time.sleep(1)
+
+    def post_orders(self, body):
+        """Depuis la fenêtre du logiciel PC : effacer, régler l'objectif."""
+        self.orders = self.api("POST", "/api/turboirl/orders", body)
+        return self.orders
+
     def execute(self, action):
         if action not in ("start", "stop"):
             return "action inconnue"
@@ -158,6 +180,12 @@ class ObsControl:
                     self.obs_request("SetCurrentProgramScene", {"sceneName": SCENE_NAME})
                 except Exception as e:
                     log(f"OBS : impossible de passer sur la scène « {SCENE_NAME} » ({e})")
+                ov = self.receiver.overlay if self.receiver is not None else None
+                if ov is not None and ov.obs is not None:
+                    try:
+                        ov.set_shown(False)  # jamais de message de coupure hérité au lancement d'une diffusion
+                    except Exception:
+                        pass
                 self.obs_request("StartStream")
                 # OBS accepte la demande même si la sortie échoue aussitôt (clé ou service absents, encodeur en
                 # erreur) : on vérifie que le stream tourne vraiment avant de dire « lancé »
@@ -198,6 +226,18 @@ class ObsControl:
 
 TS_PACKET = 188
 SCENE_NAME = "TurboIRL"          # scène OBS dédiée : créée si absente, le reste de l'OBS n'est jamais touché
+# Textes des commandes de livraison (créés s'ils manquent, contenu et visibilité pilotés ici, style et position libres)
+ORDER_TEXTS = [
+    ("TurboIRL commandes", "Commandes : 0", 24.0, 90.0, True),
+    ("TurboIRL total", "Total : 0 €", 24.0, 140.0, True),
+    ("TurboIRL commande titre", "Commande #1 en cours", 24.0, 200.0, False),
+    ("TurboIRL commande prix", "0 €", 24.0, 250.0, False),
+    ("TurboIRL commande temps", "00:00", 24.0, 300.0, False),
+]
+
+
+def euros(v):
+    return ("%.2f" % float(v)).replace(".", ",").replace(",00", "") + " €"
 MEDIA_NAME = "TurboIRL flux"     # source média qui lit le récepteur (une source existante sur la même URL est adoptée)
 
 
@@ -245,6 +285,8 @@ class ObsOverlay:
         self.retry_at = 0.0
         self.media_name = None
         self.last_error = ""
+        self.texts = {}          # nom de source texte → id d'élément dans la scène
+        self.text_state = {}     # nom → (texte, visible) déjà envoyés à OBS
 
     def start(self):
         threading.Thread(target=self.loop, daemon=True).start()
@@ -274,6 +316,12 @@ class ObsOverlay:
         fixed += self.ensure_media(obs)
         item, changes = self.ensure_text(obs)
         fixed += changes
+        self.texts = {}
+        self.text_state = {}
+        for name, default, x, y, shown in ORDER_TEXTS:
+            item_id, ch = self.ensure_text_source(obs, name, default, x, y, shown)
+            self.texts[name] = item_id
+            fixed += ch
         self.obs = obs
         self.item = item
         self.shown = None
@@ -328,40 +376,91 @@ class ObsOverlay:
 
     def ensure_text(self, obs):
         """Message de coupure dans la scène TurboIRL, masqué, au-dessus du flux ; texte et style restent libres."""
+        item_id, fixed = self.ensure_text_source(obs, self.source, self.text, 24.0, 24.0, False, label="message de coupure")
+        return (SCENE_NAME, item_id), fixed
+
+    def ensure_text_source(self, obs, name, default_text, x, y, shown, label=None):
+        """Une source texte dans la scène TurboIRL : créée si absente (style par défaut lisible), ajoutée à la scène si
+        elle existe ailleurs, texte remis si vide, replacée si hors cadre, au-dessus du flux. Style et position libres."""
+        label = label or name
         fixed = []
         try:
-            item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": self.source})["sceneItemId"]
+            item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": name})["sceneItemId"]
         except RuntimeError:
-            exists = any(i["inputName"] == self.source for i in obs.request("GetInputList").get("inputs", []))
+            exists = any(i["inputName"] == name for i in obs.request("GetInputList").get("inputs", []))
             if exists:
-                item_id = obs.request("CreateSceneItem", {"sceneName": SCENE_NAME, "sourceName": self.source,
-                                                          "sceneItemEnabled": False})["sceneItemId"]
-                fixed.append("message ajouté à la scène")
+                item_id = obs.request("CreateSceneItem", {"sceneName": SCENE_NAME, "sourceName": name,
+                                                          "sceneItemEnabled": shown})["sceneItemId"]
+                fixed.append(f"{label} ajouté à la scène")
             else:
                 kinds = obs.request("GetInputKindList").get("inputKinds", [])
                 kind = next((k for k in ("text_gdiplus_v3", "text_gdiplus_v2", "text_gdiplus", "text_ft2_source_v2") if k in kinds), None)
                 if kind is None:
                     raise RuntimeError("aucune source texte disponible dans cet OBS")
-                settings = {"text": self.text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
+                settings = {"text": default_text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
                             "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
-                item_id = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": self.source, "inputKind": kind,
-                                                      "inputSettings": settings, "sceneItemEnabled": False})["sceneItemId"]
-                fixed.append("message de coupure créé")
+                item_id = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": name, "inputKind": kind,
+                                                      "inputSettings": settings, "sceneItemEnabled": shown})["sceneItemId"]
+                fixed.append(f"{label} créé")
             obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
-                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
-        cur = obs.request("GetInputSettings", {"inputName": self.source}).get("inputSettings", {})
+                                                  "sceneItemTransform": {"positionX": x, "positionY": y}})
+        cur = obs.request("GetInputSettings", {"inputName": name}).get("inputSettings", {})
         if not str(cur.get("text", "")).strip():
-            obs.request("SetInputSettings", {"inputName": self.source, "inputSettings": {"text": self.text}, "overlay": True})
-            fixed.append("texte du message remis")
+            obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": default_text}, "overlay": True})
+            fixed.append(f"{label} : texte remis")
         video = obs.request("GetVideoSettings")
         t = obs.request("GetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id}).get("sceneItemTransform", {})
         if not (0 <= float(t.get("positionX", 0)) < float(video.get("baseWidth", 1920)) and 0 <= float(t.get("positionY", 0)) < float(video.get("baseHeight", 1080))):
             obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
-                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 24.0}})
-            fixed.append("message replacé en haut à gauche")
+                                                  "sceneItemTransform": {"positionX": x, "positionY": y}})
+            fixed.append(f"{label} replacé")
         n = len(obs.request("GetSceneItemList", {"sceneName": SCENE_NAME}).get("sceneItems", []))
         obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": max(n - 1, 0)})
-        return (SCENE_NAME, item_id), fixed
+        return item_id, fixed
+
+    def set_text(self, name, text, shown):
+        """Contenu et visibilité d'un texte des commandes, envoyés seulement s'ils changent."""
+        obs = self.obs
+        item_id = self.texts.get(name)
+        if obs is None or item_id is None:
+            return
+        prev = self.text_state.get(name)
+        if prev == (text, shown):
+            return
+        if prev is None or prev[0] != text:
+            obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": text}, "overlay": True})
+        if prev is None or prev[1] != shown:
+            obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": shown})
+        self.text_state[name] = (text, shown)
+
+    def apply_orders(self, st):
+        """État des commandes (API du VPS) → textes OBS."""
+        if self.obs is None or not st:
+            return
+        try:
+            goal = st.get("goal")
+            total = euros(st.get("total", 0))
+            if st.get("goalEnabled") and goal:
+                total += " / " + euros(goal)
+            self.set_text("TurboIRL commandes", f"Commandes : {st.get('count', 0)}", True)
+            self.set_text("TurboIRL total", f"Total : {total}", True)
+            cur = st.get("current")
+            if cur:
+                started = cur.get("startedAt", "")
+                try:
+                    t0 = time.mktime(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+                    elapsed = max(0, int(time.time() - t0))
+                except Exception:
+                    elapsed = 0
+                self.set_text("TurboIRL commande titre", f"Commande #{cur.get('id', '?')} en cours", True)
+                self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), True)
+                self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), True)
+            else:
+                for name in ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps"):
+                    self.set_text(name, self.text_state.get(name, ("", False))[0] or "-", False)
+        except Exception as e:
+            log(f"OBS : textes des commandes indisponibles ({e})")
+            self.obs = None
 
     def set_shown(self, shown):
         if self.shown == shown:
@@ -380,7 +479,9 @@ class ObsOverlay:
                         time.sleep(1)
                         continue
                     self.connect()
-                frozen = self.r.distinct > 0 and time.perf_counter() - self.r.last_new_frame > self.freeze_s
+                # affiché seulement pendant un flux du téléphone figé depuis freeze_s ; jamais sans flux (fin de
+                # diffusion, attente), sinon il restait collé jusqu'au prochain stream
+                frozen = self.r.decoder_connected and self.r.distinct > 0 and time.perf_counter() - self.r.last_new_frame > self.freeze_s
                 self.set_shown(frozen)
             except Exception as e:  # OBS fermé, source supprimée… : on réessaie sans bruit toutes les 2 s
                 if self.obs is not None or self.retry_at == 0.0:

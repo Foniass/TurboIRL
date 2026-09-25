@@ -36,6 +36,21 @@ class MainActivity : Activity() {
     private lateinit var versions: TextView
     private lateinit var testChannel: CheckBox
     private lateinit var linksStatus: TextView
+    private lateinit var tabSetup: TextView
+    private lateinit var tabLive: TextView
+    private lateinit var setupTab: View
+    private lateinit var liveTab: View
+    private lateinit var liveStatus: TextView
+    private lateinit var blur: Button
+    private lateinit var orderPrice: EditText
+    private lateinit var orderGo: Button
+    private lateinit var orderStatus: TextView
+    private lateinit var chat: android.webkit.WebView
+    private lateinit var chatHint: TextView
+    private lateinit var twitchChannel: EditText
+    private var chatChannel = ""
+    @Volatile private var orderCurrent: org.json.JSONObject? = null
+    @Volatile private var orderBusy = false
     private lateinit var cellPlanGb: EditText
     private lateinit var wifiPlanGb: EditText
     private lateinit var testSource: CheckBox
@@ -79,6 +94,18 @@ class MainActivity : Activity() {
         versions = findViewById(R.id.versions)
         testChannel = findViewById(R.id.testChannel)
         linksStatus = findViewById(R.id.linksStatus)
+        tabSetup = findViewById(R.id.tabSetup)
+        tabLive = findViewById(R.id.tabLive)
+        setupTab = findViewById(R.id.setupTab)
+        liveTab = findViewById(R.id.liveTab)
+        liveStatus = findViewById(R.id.liveStatus)
+        blur = findViewById(R.id.blur)
+        orderPrice = findViewById(R.id.orderPrice)
+        orderGo = findViewById(R.id.orderGo)
+        orderStatus = findViewById(R.id.orderStatus)
+        chat = findViewById(R.id.chat)
+        chatHint = findViewById(R.id.chatHint)
+        twitchChannel = findViewById(R.id.twitchChannel)
         cellPlanGb = findViewById(R.id.cellPlanGb)
         wifiPlanGb = findViewById(R.id.wifiPlanGb)
         testSource = findViewById(R.id.testSource)
@@ -137,6 +164,8 @@ class MainActivity : Activity() {
             showTestSection(checked)
             Thread { checkRelease() }.start()
         }
+        twitchChannel.setText(config.twitchChannel)
+        setupLive()
         cellPlanGb.setText(config.cellPlanGb.toString())
         wifiPlanGb.setText(config.wifiPlanGb.toString())
         testSource.isChecked = config.testSource
@@ -216,14 +245,127 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
+    // ---------------------------------------------------------------- onglet LIVE : onglets, flou, commandes, tchat
+
+    private fun setupLive() {
+        tabSetup.setOnClickListener { showTab(false) }
+        tabLive.setOnClickListener { showTab(true) }
+        showTab(getSharedPreferences("ui", Context.MODE_PRIVATE).getBoolean("liveTab", false))
+        blur.setOnClickListener {
+            val service = RelayService.instance
+            if (service == null) {
+                Toast.makeText(this, "Démarre le relais d'abord (onglet SETUP)", Toast.LENGTH_SHORT).show()
+            } else {
+                service.setBlur(!service.blurred)
+                applyBlurButton()
+            }
+        }
+        orderGo.setOnClickListener { orderAction() }
+        val ws = chat.settings
+        ws.javaScriptEnabled = true
+        ws.domStorageEnabled = true
+        ws.mediaPlaybackRequiresUserGesture = true
+        // the Twitch popout chat (and its login page) exist on the desktop site only
+        ws.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+        android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true)
+        chat.webViewClient = android.webkit.WebViewClient()
+        chat.webChromeClient = android.webkit.WebChromeClient()
+        loadChat()
+    }
+
+    private fun showTab(live: Boolean) {
+        setupTab.visibility = if (live) View.GONE else View.VISIBLE
+        liveTab.visibility = if (live) View.VISIBLE else View.GONE
+        tabLive.setTextColor(if (live) 0xFFFF6D00.toInt() else 0xFF888888.toInt())
+        tabSetup.setTextColor(if (live) 0xFF888888.toInt() else 0xFFFF6D00.toInt())
+        tabLive.setBackgroundColor(if (live) 0x33FF6D00 else 0)
+        tabSetup.setBackgroundColor(if (live) 0 else 0x33FF6D00)
+        getSharedPreferences("ui", Context.MODE_PRIVATE).edit().putBoolean("liveTab", live).apply()
+        if (live) {
+            loadChat()
+            applyBlurButton()
+        }
+    }
+
+    /** Twitch popout chat of the configured channel; reloaded only when the channel changes. */
+    private fun loadChat() {
+        val channel = Config.load(this).twitchChannel.trim().trimStart('@').lowercase()
+        chatHint.visibility = if (channel.isEmpty()) View.VISIBLE else View.GONE
+        if (channel.isEmpty() || channel == chatChannel) return
+        chatChannel = channel
+        chat.loadUrl("https://www.twitch.tv/popout/$channel/chat?popout=")
+    }
+
+    private fun applyBlurButton() {
+        val on = RelayService.instance?.blurred ?: false
+        blur.text = if (on) "DÉFLOUTER" else "FLOUTER"
+        blur.setBackgroundColor(if (on) 0xFFB71C1C.toInt() else 0xFF424242.toInt())
+    }
+
+    /** GO with a price = start an order ; then the same button ends it. */
+    private fun orderAction() {
+        if (orderBusy) return
+        val config = Config.load(this)
+        val token = vpsToken.text.toString().trim().ifEmpty { config.vpsToken }
+        if (token.isEmpty()) {
+            Toast.makeText(this, "Jeton VPS manquant (SETUP)", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val body = org.json.JSONObject()
+        if (orderCurrent != null) {
+            body.put("action", "finish")
+        } else {
+            val price = orderPrice.text.toString().trim().replace(',', '.').toDoubleOrNull()
+            if (price == null || price < 0) {
+                Toast.makeText(this, "Entre le prix de la commande", Toast.LENGTH_SHORT).show()
+                return
+            }
+            body.put("action", "start").put("price", price)
+        }
+        orderBusy = true
+        orderGo.isEnabled = false
+        Uploader.postOrders(config.vpsUrl, token, body) { r ->
+            handler.post {
+                orderBusy = false
+                orderGo.isEnabled = true
+                if (r == null) Toast.makeText(this, "VPS injoignable, réessaie", Toast.LENGTH_SHORT).show()
+                else {
+                    if (body.optString("action") == "start") orderPrice.setText("")
+                    applyOrders(r)
+                }
+            }
+        }
+    }
+
+    private fun euros(v: Double): String = String.format(java.util.Locale.FRANCE, "%.2f €", v).replace(",00 €", " €")
+
+    private fun applyOrders(o: org.json.JSONObject?) {
+        if (o == null) return
+        val cur = o.optJSONObject("current")
+        orderCurrent = cur
+        val goal = if (o.optBoolean("goalEnabled") && !o.isNull("goal") && o.optDouble("goal") > 0) " / " + euros(o.optDouble("goal")) else ""
+        orderStatus.text = "${o.optInt("count")} commande(s) finie(s) · total ${euros(o.optDouble("total"))}$goal" +
+            (cur?.let { "\nCommande #${it.optInt("id")} en cours : ${euros(it.optDouble("price"))}" } ?: "")
+        if (cur != null) {
+            orderPrice.visibility = View.GONE
+            orderGo.text = "COMMANDE FINIE"
+            orderGo.setBackgroundColor(0xFF2E7D32.toInt())
+        } else {
+            orderPrice.visibility = View.VISIBLE
+            orderGo.text = "GO"
+            orderGo.setBackgroundColor(0xFF424242.toInt())
+        }
+    }
+
     /** Every 2 s while the screen is visible: OBS state on the PC, as published by the receiver through the VPS. */
     private fun pollObs() {
         while (obsPolling) {
             val token = vpsToken.text.toString().trim()
+            val st = if (token.isEmpty()) null else Uploader.fetchObsStatus(Config.load(this).vpsUrl, token)
             val text = if (token.isEmpty()) {
                 "OBS PC : renseigne le jeton VPS pour piloter le stream"
             } else {
-                val st = Uploader.fetchObsStatus(Config.load(this).vpsUrl, token)
                 when {
                     st == null -> "OBS PC : VPS injoignable"
                     !st.optBoolean("receiverOk") -> "OBS PC : récepteur PC absent (PC éteint ou récepteur non lancé)"
@@ -239,7 +381,20 @@ class MainActivity : Activity() {
                     "\nLogiciel PC : version $v sur ${st.optString("device")}"
                 } ?: "")
             }
-            handler.post { obsStatus.text = text }
+            val live = when {
+                token.isEmpty() -> "Twitch : jeton VPS manquant"
+                st == null -> "Twitch : VPS injoignable"
+                !st.optBoolean("receiverOk") -> "Twitch : PC absent"
+                !st.optBoolean("obsOpen") -> "Twitch : OBS fermé"
+                st.optBoolean("streaming") -> "Twitch : EN DIRECT depuis ${st.optString("timecode")} · ${st.optInt("kbps")} kb/s"
+                else -> "Twitch : stream arrêté (Lancer OBS dans SETUP)"
+            }
+            val orders = if (token.isEmpty()) null else Uploader.fetchOrders(Config.load(this).vpsUrl, token)
+            handler.post {
+                obsStatus.text = text
+                liveStatus.text = live
+                applyOrders(orders)
+            }
             try {
                 Thread.sleep(2000)
             } catch (_: InterruptedException) {
@@ -414,6 +569,7 @@ class MainActivity : Activity() {
             goproResolution = resolution ?: 720,
             goproMaxKbps = maxKbps ?: 4000,
             vpsToken = vpsToken.text.toString().trim(),
+            twitchChannel = twitchChannel.text.toString().trim().trimStart('@'),
             testChannel = testChannel.isChecked,
             cellPlanGb = cellPlanGb.text.toString().toIntOrNull() ?: 0,
             wifiPlanGb = wifiPlanGb.text.toString().toIntOrNull() ?: 0,
@@ -435,7 +591,7 @@ class MainActivity : Activity() {
         toggle.visibility = if (target != null && !running) View.GONE else View.VISIBLE
         if (target != null && !downloading) update.text = "Mettre à jour vers $target"
         versions.text = releaseText
-        for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps, vpsToken)) {
+        for (field in listOf(srtHost, srtPort, srtLatency, goproSsid, goproPassword, goproResolution, goproMaxKbps, outMaxKbps, outMaxHeight, audioKbps, vpsToken, twitchChannel)) {
             field.isEnabled = !running
         }
         goproEnabled.isEnabled = !running

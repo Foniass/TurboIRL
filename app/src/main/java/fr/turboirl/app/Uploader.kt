@@ -176,6 +176,26 @@ class Uploader(
         fun isoNow(): String =
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.ROOT).format(java.util.Date())
 
+        /** Delivery orders state on the VPS (count, total, goal, current), or null when unreachable. */
+        fun fetchOrders(baseUrl: String, token: String): JSONObject? =
+            try {
+                http(baseUrl.trimEnd('/') + "/api/turboirl/orders", token, null)
+            } catch (_: Exception) {
+                null
+            }
+
+        /** Starts (with a price) or finishes the current order; result on the calling thread's callback. */
+        fun postOrders(baseUrl: String, token: String, body: JSONObject, done: (JSONObject?) -> Unit) {
+            Thread {
+                val r = try {
+                    http(baseUrl.trimEnd('/') + "/api/turboirl/orders", token, body.toString())
+                } catch (_: Exception) {
+                    null
+                }
+                done(r)
+            }.start()
+        }
+
         /** Published versions: `{ stable: { app, pc }, test: { app, pc }, files: [...] }`, or null when unreachable. */
         fun fetchRelease(baseUrl: String, token: String): JSONObject? =
             try {

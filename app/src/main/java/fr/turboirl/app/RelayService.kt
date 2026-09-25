@@ -75,6 +75,16 @@ class RelayService : Service() {
     var snapshot: Snapshot? = null
         private set
 
+    /** Outgoing video blurred (LIVE tab). Clear at every start. */
+    @Volatile var blurred = false
+        private set
+
+    fun setBlur(on: Boolean) {
+        blurred = on
+        transcoder?.setBlur(on)
+        logger.log(if (on) "Vidéo floutée (bouton FLOUTER)" else "Vidéo nette (bouton DÉFLOUTER)")
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -126,6 +136,7 @@ class RelayService : Service() {
         flvRelay.processor = tc
         flvRelay.growingHold = false
         transcoder = tc
+        blurred = false
         val at = AudioTranscoder(flvRelay, logger, config.audioKbps)
         flvRelay.audioProcessor = at
         audioTranscoder = at

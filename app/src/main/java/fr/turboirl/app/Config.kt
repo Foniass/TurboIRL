@@ -30,6 +30,8 @@ data class Config(
     val testSource: Boolean,
     val impairCell: String,
     val impairWifi: String,
+    /** Twitch channel whose chat is shown in the LIVE tab. */
+    val twitchChannel: String,
     /** Last session started by the service, so that the journal can be sent by hand after a crash. */
     val lastSession: String,
     val lastStartedAt: String,
@@ -58,6 +60,7 @@ data class Config(
             .putBoolean("testSource", testSource)
             .putString("impairCell", impairCell)
             .putString("impairWifi", impairWifi)
+            .putString("twitchChannel", twitchChannel)
             .putString("lastSession", lastSession)
             .putString("lastStartedAt", lastStartedAt)
             .apply()
@@ -120,6 +123,7 @@ data class Config(
                 testSource = p.getBoolean("testSource", false),
                 impairCell = p.getString("impairCell", "").orEmpty(),
                 impairWifi = p.getString("impairWifi", "").orEmpty(),
+                twitchChannel = p.getString("twitchChannel", "").orEmpty(),
                 lastSession = p.getString("lastSession", "").orEmpty(),
                 lastStartedAt = p.getString("lastStartedAt", "").orEmpty(),
             )

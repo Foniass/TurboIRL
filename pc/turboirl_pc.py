@@ -207,7 +207,7 @@ class App:
         frame.grid(sticky="nsew")
         self.rows = {}
         for i, (key, label) in enumerate([("version", "Version"), ("vps", "VPS"), ("obs", "OBS"),
-                                          ("phone", "Téléphone"), ("stream", "Stream OBS")]):
+                                          ("phone", "Téléphone"), ("stream", "Stream OBS"), ("orders", "Commandes")]):
             dot = tk.Canvas(frame, width=14, height=14, highlightthickness=0)
             dot.grid(row=i, column=0, padx=(0, 8), pady=3)
             ttk.Label(frame, text=label, width=11).grid(row=i, column=1, sticky="w")
@@ -215,16 +215,17 @@ class App:
             ttk.Label(frame, textvariable=var, width=62, anchor="w").grid(row=i, column=2, sticky="w")
             self.rows[key] = (dot, var)
             self.set(key, "…", GREY)
-        ttk.Label(frame, text="Derniers événements").grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        ttk.Label(frame, text="Derniers événements").grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 2))
         self.events = tk.Text(frame, height=10, width=90, state="disabled", font=("Consolas", 9), wrap="none")
-        self.events.grid(row=6, column=0, columnspan=3, sticky="we")
+        self.events.grid(row=7, column=0, columnspan=3, sticky="we")
         bottom = ttk.Frame(frame)
-        bottom.grid(row=7, column=0, columnspan=3, sticky="we", pady=(10, 0))
+        bottom.grid(row=8, column=0, columnspan=3, sticky="we", pady=(10, 0))
         self.autostart = tk.BooleanVar(value=bool(self.cfg.get("autostart")))
         ttk.Checkbutton(bottom, text="Lancer au démarrage de Windows", variable=self.autostart,
                         command=self.toggle_autostart).pack(side="left")
         ttk.Button(bottom, text="Quitter", command=self.quit).pack(side="right")
         ttk.Button(bottom, text="Réglages…", command=self.settings).pack(side="right", padx=(0, 8))
+        ttk.Button(bottom, text="Effacer les commandes", command=self.clear_orders).pack(side="right", padx=(0, 8))
 
     def set(self, key, text, color):
         dot, var = self.rows[key]
@@ -318,6 +319,15 @@ class App:
                     self.set("phone", f"flux reçu : {imgs}, {fifo}{extra}", GREEN if not extra else ORANGE)
             else:
                 self.set("phone", "en attente du téléphone (appuyer sur Démarrer dans l'appli)", GREY)
+            o = ctl.orders if ctl else None
+            if o:
+                goal = o.get("goal")
+                total = receiver.euros(o.get("total", 0)) + (f" / {receiver.euros(goal)}" if o.get("goalEnabled") and goal else "")
+                cur = o.get("current")
+                txt = f"{o.get('count', 0)} finie(s) · total {total}" + (f" · #{cur.get('id')} en cours ({receiver.euros(cur.get('price', 0))})" if cur else "")
+                self.set("orders", txt, GREEN if cur else GREY)
+            else:
+                self.set("orders", "…", GREY)
             if st.get("obsOpen"):
                 if st.get("streaming"):
                     self.set("stream", f"EN DIRECT depuis {st.get('timecode', '')} · {st.get('kbps', 0)} kb/s", GREEN)
@@ -343,15 +353,50 @@ class App:
         rb.grid(row=1, column=1, sticky="w")
         ttk.Radiobutton(rb, text="stable (version validée)", variable=channel, value="stable").pack(side="left")
         ttk.Radiobutton(rb, text="test (dernière publiée)", variable=channel, value="test").pack(side="left", padx=(8, 0))
-        ttk.Label(f, text="Les changements s'appliquent au prochain lancement.").grid(row=2, column=0, columnspan=2, pady=(8, 4))
+        ttk.Label(f, text="Jeton et canal s'appliquent au prochain lancement.").grid(row=2, column=0, columnspan=2, pady=(8, 4))
+        ctl = self.receiver.control if self.receiver is not None else None
+        o = (ctl.orders if ctl else None) or {}
+        ttk.Label(f, text="Objectif de thune (€)").grid(row=3, column=0, sticky="w")
+        gf = ttk.Frame(f)
+        gf.grid(row=3, column=1, sticky="w")
+        goal = tk.StringVar(value="" if o.get("goal") is None else str(o.get("goal")).replace(".", ","))
+        goal_on = tk.BooleanVar(value=bool(o.get("goalEnabled")))
+        ttk.Entry(gf, textvariable=goal, width=10).pack(side="left")
+        ttk.Checkbutton(gf, text="affiché sur le stream (Total : x / objectif)", variable=goal_on).pack(side="left", padx=(8, 0))
 
         def ok():
             self.cfg["token"] = token.get().strip()
             self.cfg["channel"] = channel.get()
             save_config(self.cfg)
+            if ctl is not None:
+                body = {"action": "goal", "enabled": bool(goal_on.get())}
+                g = goal.get().strip().replace(",", ".")
+                if g:
+                    try:
+                        body["goal"] = float(g)
+                    except ValueError:
+                        messagebox.showerror("TurboIRL", "Objectif invalide")
+                        return
+                try:
+                    ctl.post_orders(body)
+                except Exception as e:
+                    messagebox.showerror("TurboIRL", f"Objectif non enregistré (VPS) : {e}")
+                    return
             win.destroy()
 
-        ttk.Button(f, text="Enregistrer", command=ok).grid(row=3, column=1, sticky="e")
+        ttk.Button(f, text="Enregistrer", command=ok).grid(row=4, column=1, sticky="e")
+
+    def clear_orders(self):
+        ctl = self.receiver.control if self.receiver is not None else None
+        if ctl is None:
+            return
+        if not messagebox.askyesno("TurboIRL", "Remettre le compteur de commandes et le total à zéro ?"):
+            return
+        try:
+            ctl.post_orders({"action": "clear"})
+            receiver.log("commandes effacées depuis le logiciel PC")
+        except Exception as e:
+            messagebox.showerror("TurboIRL", f"Effacement impossible (VPS) : {e}")
 
     def toggle_autostart(self):
         self.cfg["autostart"] = bool(self.autostart.get())

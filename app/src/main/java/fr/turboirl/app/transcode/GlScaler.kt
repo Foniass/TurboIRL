@@ -52,6 +52,9 @@ class GlScaler(private val logger: Logger) {
 
     /** Draw one frame in [frameDivider] (1 = all, 2 = half rate, 6 = 5 i/s…). */
     @Volatile var frameDivider = 1
+    /** Pixelate the picture (faces and addresses unreadable) before encoding: the LIVE tab's blur button. */
+    @Volatile var blur = false
+    private var uBlocks = 0
     private var frameCount = 0L
 
     @Volatile var framesDrawn = 0L
@@ -115,6 +118,7 @@ class GlScaler(private val logger: Logger) {
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         aTexCoord = GLES20.glGetAttribLocation(program, "aTexCoord")
         uTexMatrix = GLES20.glGetUniformLocation(program, "uTexMatrix")
+        uBlocks = GLES20.glGetUniformLocation(program, "uBlocks")
 
         val tex = IntArray(1)
         GLES20.glGenTextures(1, tex, 0)
@@ -196,6 +200,8 @@ class GlScaler(private val logger: Logger) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texMatrix, 0)
+        // 48 x 27 blocks on the whole picture (a 40 px mosaic at 1080p): nothing identifiable survives
+        GLES20.glUniform2f(uBlocks, if (blur) 48f else 0f, if (blur) 27f else 0f)
         GLES20.glEnableVertexAttribArray(aPosition)
         GLES20.glVertexAttribPointer(aPosition, 2, GLES20.GL_FLOAT, false, 0, VERTICES)
         GLES20.glEnableVertexAttribArray(aTexCoord)
@@ -251,9 +257,14 @@ class GlScaler(private val logger: Logger) {
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
             uniform samplerExternalOES sTexture;
+            uniform vec2 uBlocks;
             varying vec2 vTexCoord;
             void main() {
-                gl_FragColor = texture2D(sTexture, vTexCoord);
+                vec2 uv = vTexCoord;
+                if (uBlocks.x > 0.0) {
+                    uv = (floor(uv * uBlocks) + 0.5) / uBlocks;
+                }
+                gl_FragColor = texture2D(sTexture, uv);
             }
         """
 

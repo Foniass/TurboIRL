@@ -70,6 +70,13 @@ class VideoTranscoder(
     private val handler = Handler(thread.looper)
 
     private var scaler: GlScaler? = null
+    @Volatile private var blur = false
+
+    /** Blur on/off for the outgoing video (applies at once, and to any scaler created later). */
+    fun setBlur(on: Boolean) {
+        blur = on
+        handler.post { scaler?.blur = on }
+    }
     private var decoder: MediaCodec? = null
     private var encoder: MediaCodec? = null
     private var encoderSurface: Surface? = null
@@ -225,7 +232,7 @@ class VideoTranscoder(
         val s = sps ?: return
         val p = pps ?: return
         try {
-            val sc = scaler ?: GlScaler(logger).also { scaler = it }
+            val sc = scaler ?: GlScaler(logger).also { scaler = it; it.blur = blur }
             sc.frameDivider = stats.frameDivider
             sc.onFrameConsumed = { handler.post { inFlightSinceNs = 0L; pumpDecoded() } }
             createEncoder()
