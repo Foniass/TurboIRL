@@ -19,6 +19,7 @@ Usage :
   python tools/receiver.py --source "udp://127.0.0.1:9003?timeout=5000000" --once      (relecture, voir replay.ps1)
 """
 import argparse
+import calendar
 import os
 import re
 import socket
@@ -448,7 +449,7 @@ class ObsOverlay:
             if cur:
                 started = cur.get("startedAt", "")
                 try:
-                    t0 = time.mktime(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone
+                    t0 = calendar.timegm(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S"))  # heure UTC de l'API
                     elapsed = max(0, int(time.time() - t0))
                 except Exception:
                     elapsed = 0
