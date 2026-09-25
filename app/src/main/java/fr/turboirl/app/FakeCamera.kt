@@ -92,7 +92,10 @@ class FakeCamera(private val file: File, private val listener: RtmpListener, pri
                 // real-time pacing on the sample timestamps
                 val wait = startNs + tUs * 1000 - System.nanoTime()
                 if (wait > 0) Thread.sleep(wait / 1_000_000, (wait % 1_000_000).toInt())
-                val data = ByteArray(n).also { buf.get(it, 0, n); buf.clear() }
+                var data = ByteArray(n).also { buf.get(it, 0, n); buf.clear() }
+                // MediaExtractor hands H.264 samples with Annex-B start codes; the relay expects the camera's
+                // AVCC layout (4-byte NAL lengths), so convert (25/09: every frame was cut wrong, decoders silent)
+                if (track == vTrack) data = toAvcc(data)
                 val tMs = tUs / 1000
                 if (track == vTrack) {
                     nVideo++
@@ -113,6 +116,28 @@ class FakeCamera(private val file: File, private val listener: RtmpListener, pri
         } finally {
             ex.release()
         }
+    }
+
+    /** Annex-B (00 00 01 / 00 00 00 01 before each NAL) → 4-byte length prefixes; AVCC input is returned as is. */
+    private fun toAvcc(d: ByteArray): ByteArray {
+        if (d.size < 4 || !(d[0].toInt() == 0 && d[1].toInt() == 0 && (d[2].toInt() == 1 || (d[2].toInt() == 0 && d[3].toInt() == 1)))) return d
+        val starts = ArrayList<Int>()   // index of the first byte of each NAL
+        var i = 0
+        while (i + 2 < d.size) {
+            if (d[i].toInt() == 0 && d[i + 1].toInt() == 0 && d[i + 2].toInt() == 1) {
+                starts.add(i + 3)
+                i += 3
+            } else i++
+        }
+        val out = java.io.ByteArrayOutputStream(d.size + 16)
+        for ((k, s) in starts.withIndex()) {
+            var e = if (k + 1 < starts.size) starts[k + 1] - 3 else d.size
+            while (e > s && d[e - 1].toInt() == 0) e--   // trailing zero of a 4-byte start code belongs to the code
+            val len = e - s
+            out.write(len ushr 24); out.write(len ushr 16); out.write(len ushr 8); out.write(len)
+            out.write(d, s, len)
+        }
+        return out.toByteArray()
     }
 
     /** csd buffers carry an Annex-B start code: return the bare NAL unit. */
