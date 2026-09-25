@@ -248,6 +248,7 @@ ORDER_TEXTS = [
     ("TurboIRL commande temps", "00:00", 24.0, 300.0, False),
 ]
 CURRENT_TEXTS = ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps")
+CURRENT_BG = "TurboIRL commande bg"   # fond ajouté à la main dans OBS (facultatif) : suit la visibilité de la commande en cours
 SHOW_DELAY_S = 1.5   # OBS relit les fichiers environ chaque seconde : on n'affiche qu'une fois le nouveau contenu lu
 time.strptime("2000-01-01", "%Y-%m-%d")  # charge _strptime une fois (premier appel non sûr entre threads)
 
@@ -344,6 +345,9 @@ class ObsOverlay:
         self.last_error = ""
         self.texts = {}          # nom de source texte → id d'élément dans la scène
         self.text_state = {}     # nom → (texte, visible) déjà envoyés à OBS
+        self.bg_item = None         # id d'élément du fond « TurboIRL commande bg » s'il existe dans la scène
+        self.bg_shown = None        # visibilité envoyée pour ce fond (None = inconnue)
+        self.bg_checked = 0.0       # dernière recherche du fond (refaite toutes les 30 s s'il manque)
         self.phone_latency_ms = 0   # tampon SRT du téléphone, transmis avec chaque commande (0 = inconnu → 12 s)
         self.order_delay_s = 0.0    # décalage appliqué aux textes des commandes (délai GoPro → OBS estimé)
         # la connexion OBS est utilisée par le thread du gel et par celui des commandes : jamais deux requêtes à la
@@ -384,6 +388,7 @@ class ObsOverlay:
             item_id, ch = self.ensure_text_source(obs, name, default, x, y, shown, from_file=True)
             self.texts[name] = item_id
             fixed += ch
+        self.bg_item, self.bg_shown, self.bg_checked = None, None, 0.0
         self.obs = obs
         self.item = item
         self.shown = None
@@ -556,12 +561,35 @@ class ObsOverlay:
                 self.set_text("TurboIRL commande titre", f"COMMANDE #{cur.get('id', '?')}", shown)
                 self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), shown)
                 self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), shown)
+                self.set_bg(shown)
             else:
                 for name in CURRENT_TEXTS:
                     self.set_text(name, "", False)
+                self.set_bg(False)
           except Exception as e:
             log(f"OBS : textes des commandes indisponibles ({e})")
             self.obs = None
+
+    def set_bg(self, shown):
+        """Fond de la commande en cours (source « TurboIRL commande bg », ajoutée à la main dans OBS s'il y en a un) :
+        même visibilité que ses textes."""
+        obs = self.obs
+        if obs is None:
+            return
+        if self.bg_item is None:
+            if time.time() - self.bg_checked < 30:
+                return
+            self.bg_checked = time.time()
+            try:
+                self.bg_item = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": CURRENT_BG})["sceneItemId"]
+                self.bg_shown = None
+                log(f"OBS : fond « {CURRENT_BG} » trouvé, il suivra la commande en cours")
+            except Exception:
+                return   # pas de fond dans la scène : rien à faire
+        if self.bg_shown == shown:
+            return
+        obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": self.bg_item, "sceneItemEnabled": shown})
+        self.bg_shown = shown
 
     def set_shown(self, shown):
         with self.lock:
