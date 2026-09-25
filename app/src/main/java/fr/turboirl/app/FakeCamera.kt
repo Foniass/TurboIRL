@@ -71,14 +71,7 @@ class FakeCamera(private val file: File, private val listener: RtmpListener, pri
             val startNs = System.nanoTime()
             var loopOffsetUs = 0L
             var loops = 0
-            var nVideo = 0L
-            var nAudio = 0L
-            var lastReport = System.nanoTime()
             while (running) {
-                if (System.nanoTime() - lastReport > 30_000_000_000L) {
-                    lastReport = System.nanoTime()
-                    logger.log("Source de test : $nVideo images et $nAudio trames son envoyées, ${(System.nanoTime() - startNs) / 1_000_000_000} s écoulées")
-                }
                 val n = ex.readSampleData(buf, 0)
                 if (n < 0) {
                     loops++
@@ -98,11 +91,8 @@ class FakeCamera(private val file: File, private val listener: RtmpListener, pri
                 if (track == vTrack) data = toAvcc(data)
                 val tMs = tUs / 1000
                 if (track == vTrack) {
-                    nVideo++
-                    if (nVideo == 1L) logger.log("Source de test : première image ${if (sync) "clé" else "NON clé"} de $n octets, NAL ${data.take(5).joinToString(" ") { "%02x".format(it) }}")
                     listener.onVideo(tMs, byteArrayOf(if (sync) 0x17 else 0x27, 1, 0, 0, 0) + data)
                 } else {
-                    nAudio++
                     listener.onAudio(tMs, byteArrayOf(0xAF.toByte(), 1) + data)
                 }
                 ex.advance()

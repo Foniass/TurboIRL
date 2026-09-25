@@ -39,9 +39,14 @@ DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
 DEFAULT_RELAY_HOST = "turboirl.mathisjacqueline.com"
 
 
-def relay_source(a, token):
-    """Lecture du flux sur MediaMTX (VPS) : SRT en appelant, identifié par le jeton de lecture."""
-    return f"srt://{a.relay_host}:{a.relay_port}?streamid=read:turboirl:reader:{token}&latency={a.relay_latency_ms * 1000}"
+RELAY_PATHS = ("turboirlb", "turboirl")   # flux fusionné (appli ≥ 2.5, via bond) puis publication directe (appli ≤ 2.4)
+
+
+def relay_source(a, token, attempt=0):
+    """Lecture du flux sur MediaMTX (VPS) : SRT en appelant, identifié par le jeton de lecture ; les deux chemins
+    possibles sont essayés à tour de rôle."""
+    path = RELAY_PATHS[attempt % len(RELAY_PATHS)]
+    return f"srt://{a.relay_host}:{a.relay_port}?streamid=read:{path}:reader:{token}&latency={a.relay_latency_ms * 1000}"
 
 
 def vps_read_token():
@@ -498,6 +503,8 @@ class Receiver:
             self.decoder_had_stream = False
             if self.stopping:
                 return
+            if self.a.relay_token:
+                self.a.source = relay_source(self.a, self.a.relay_token, self.session)  # chemin alterné à chaque essai
             p = subprocess.Popen(self.decoder_args(dump), stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
                                  creationflags=NO_WINDOW)
             self.decoder = p
@@ -980,10 +987,12 @@ def parse_args(argv=None):
     ap.add_argument("--device", default="", help="nom de ce PC dans l'état publié au VPS")
     ap.add_argument("--version", default="", help="version du logiciel PC publiée au VPS")
     a = ap.parse_args(argv)
+    a.relay_token = ""
     if not a.source:
         token = a.token or vps_read_token()
         if not token:
             sys.exit("pas de --source et pas de jeton (~/.turboirl-vps.env ou --token) pour le relais du VPS")
+        a.relay_token = token
         a.source = relay_source(a, token)
         log(f"lecture du relais SRT du VPS : srt://{a.relay_host}:{a.relay_port} (latence {a.relay_latency_ms} ms)")
     return a
