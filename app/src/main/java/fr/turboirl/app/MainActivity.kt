@@ -275,10 +275,15 @@ class MainActivity : Activity() {
         ws.javaScriptEnabled = true
         ws.domStorageEnabled = true
         ws.mediaPlaybackRequiresUserGesture = true
-        // the Twitch popout chat (and its login page) exist on the desktop site only; the login page also rejects
-        // browsers it finds too old, so the Chrome version is the installed WebView's own (kept current by Play)
-        val chrome = Regex("Chrome/(\\d+)").find(ws.userAgentString)?.groupValues?.get(1) ?: "140"
-        ws.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chrome.0.0.0 Safari/537.36"
+        // the Twitch popout chat (and its login page) exist on the desktop site only. The login page refuses
+        // "unsupported browsers": a desktop Chrome UA (128, then the WebView's own version) was still refused on the
+        // friend's phone (2.15, 2.16); a desktop Firefox UA is the one reported to pass from an Android WebView
+        AppLog.log("Tchat : WebView « ${ws.userAgentString} »")
+        ws.userAgentString = "Mozilla/5.0 (X11; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0"
+        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            // no X-Requested-With: <package> header, the classic WebView tell
+            androidx.webkit.WebSettingsCompat.setRequestedWithHeaderOriginAllowList(ws, emptySet())
+        }
         android.webkit.CookieManager.getInstance().setAcceptCookie(true)
         android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true)
         chat.webViewClient = android.webkit.WebViewClient()

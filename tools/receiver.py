@@ -152,19 +152,24 @@ class ObsControl:
             self.orders_offset = now - time.time()
 
     def orders_loop(self):
-        """Commandes : état + historique daté relevés chaque seconde, textes OBS décalés du délai vidéo."""
+        """Commandes : état + historique daté relevés chaque seconde, textes OBS décalés du délai vidéo.
+        Les textes sont recalculés 4 fois par seconde : à une fois par seconde (plus la durée de la requête), le
+        chrono sautait des secondes, OBS ne relisant les fichiers qu'environ chaque seconde lui aussi."""
+        n = 0
         while True:
-            try:
-                self.set_orders(self.api("GET", "/api/turboirl/orders"))
-            except Exception:
-                pass
+            if n % 4 == 0:
+                try:
+                    self.set_orders(self.api("GET", "/api/turboirl/orders"))
+                except Exception:
+                    pass
             try:
                 ov = self.receiver.overlay if self.receiver is not None else None
                 if ov is not None:
                     ov.apply_orders(self.orders, time.time() + self.orders_offset)
             except Exception:
                 pass
-            time.sleep(1)
+            n += 1
+            time.sleep(0.25)
 
     def post_orders(self, body):
         """Depuis la fenêtre du logiciel PC : effacer, régler l'objectif."""
