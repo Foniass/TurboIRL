@@ -29,6 +29,18 @@ class VideoTranscoder(
     initialHeight: Int,
 ) : VideoProcessor {
 
+    /** Decoder-side view for the journal: what libmedia actually did with our frames. */
+    @Volatile var debugInfo = ""
+
+    fun debug(): String = try {
+        "décodeur ${decoder?.name ?: "absent"} : entrées libres ${freeInputs.size}, en attente ${pending.size}, sorties en file ${decodedOut.size}, " +
+            "consommées $queued, callbacks sortie $outputCallbacks (vides $emptyOutputs), attente image clé $awaitingKeyframe"
+    } catch (_: Exception) { "?" }
+
+    private var queued = 0L
+    private var outputCallbacks = 0L
+    private var emptyOutputs = 0L
+
     class Stats {
         /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
         @Volatile var frameDivider = 1
@@ -195,6 +207,7 @@ class VideoTranscoder(
             dec.configure(decFormat, sc.inputSurface, null, 0)
             dec.start()
             decoder = dec
+            logger.log("Décodeur ${dec.name} configuré (${inWidth}x$inHeight, SPS ${s.size} o, PPS ${p.size} o)")
             awaitingKeyframe = true
             failures = 0
             logger.log("Réencodage démarré : $reason → ${outWidth}x${stats.height} à ${targetKbps} kb/s (${encoder?.name})")
@@ -351,6 +364,7 @@ class VideoTranscoder(
                 buf.clear()
                 buf.put(f.data)
                 dec.queueInputBuffer(index, 0, f.data.size, f.ptsUs, 0)
+                queued++
             } catch (e: Exception) {
                 onCodecError("décodeur", e)
                 return
@@ -381,7 +395,9 @@ class VideoTranscoder(
 
         override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
             if (codec !== decoder) return
+            outputCallbacks++
             if (info.size <= 0) {
+                emptyOutputs++
                 try {
                     codec.releaseOutputBuffer(index, false)
                 } catch (e: Exception) {
