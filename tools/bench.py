@@ -123,6 +123,7 @@ def main():
     ap.add_argument("--port", type=int, default=9005)
     ap.add_argument("--audio-port", type=int, default=9051)
     ap.add_argument("--seconds", type=int, default=0, help="durée (0 = jusqu'à Ctrl+C)")
+    ap.add_argument("--ids", action="store_true", help="imprime les derniers numéros d'image après une tranche anormale")
     a = ap.parse_args()
     audio = Audio(a.audio_port)
     audio.start()
@@ -135,6 +136,7 @@ def main():
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
     frame_bytes = W * BAND
     prev = None
+    ids = []
     win = dict(frames=0, dup=0, skip=0, missing=0, disorder=0, unreadable=0)
     total = dict(win)
     t_start = time.time()
@@ -156,6 +158,9 @@ def main():
             data = b"".join(parts)
             fid = read_frame_id(data)
             win["frames"] += 1
+            ids.append(fid)
+            if len(ids) > 400:
+                del ids[:100]
             if fid is None:
                 win["unreadable"] += 1
             elif prev is not None:
@@ -175,6 +180,8 @@ def main():
                 print(time.strftime("[%H:%M:%S] ") + f"10 s : images {win['frames']}, doublons {win['dup']}, sauts {win['skip']} "
                       f"(manquantes {win['missing']}), désordre {win['disorder']}, illisibles {win['unreadable']} | "
                       f"son : trous {gaps} ({gap_ms:.0f} ms), ruptures {jumps}", flush=True)
+                if a.ids and (win["dup"] or win["skip"]):
+                    print("      numéros récents :", " ".join(str(i) for i in ids[-40:]), flush=True)
                 for k in win:
                     total[k] += win[k]
                     win[k] = 0

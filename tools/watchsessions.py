@@ -33,7 +33,10 @@ def get(path):
 
 
 def say(msg):
-    print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+    try:
+        print(time.strftime("[%H:%M:%S] ") + msg, flush=True)
+    except Exception:
+        print(time.strftime("[%H:%M:%S] ") + msg.encode("ascii", "replace").decode(), flush=True)
 
 
 def main():
@@ -65,7 +68,10 @@ def main():
                     say(f"session {sid} terminée")
                 last_reason = reason
         except Exception as e:
-            say(f"veille : erreur passagère ({e})")
+            try:
+                say(f"veille : erreur passagère ({e!r})")
+            except Exception:
+                pass
         time.sleep(30)
 
 

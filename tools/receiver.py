@@ -779,30 +779,62 @@ class Receiver:
     def output(self):
         srv_v = listener(self.a.out_video)
         srv_a = listener(self.a.out_audio)
+        srv_v.settimeout(1.0)
+        srv_a.settimeout(1.0)
         silence = bytes(self.audio_chunk)
         while True:
-            self.encoder = subprocess.Popen(self.encoder_args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                            creationflags=NO_WINDOW)
-            threading.Thread(target=self.read_encoder_log, args=(self.encoder.stderr,), daemon=True).start()
+            enc = subprocess.Popen(self.encoder_args(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                   creationflags=NO_WINDOW)
+            self.encoder = enc
+            threading.Thread(target=self.read_encoder_log, args=(enc.stderr,), daemon=True).start()
             # ffmpeg ouvre et sonde ses entrées l'une après l'autre : la vidéo part dès sa connexion, le son dès la
-            # sienne, chacun dans son thread ; aucun tick n'est jamais sauté (ffmpeg horodate par comptage)
-            cv, _ = srv_v.accept()
-            cv.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)
-            t0 = time.perf_counter()
-            socks = [cv]
-            tv = threading.Thread(target=self.video_out, args=(cv, t0, socks), daemon=True)
-            tv.start()
-            ca, _ = srv_a.accept()
-            ca.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
-            socks.append(ca)
-            log(f"encodeur connecté : sortie continue vers udp://127.0.0.1:{self.a.obs_port} (OBS)")
-            ta = threading.Thread(target=self.audio_out, args=(ca, t0, socks, silence), daemon=True)
-            ta.start()
-            tv.join()
-            ta.join()
-            self.encoder.wait()
+            # sienne, chacun dans son thread ; aucun tick n'est jamais sauté (ffmpeg horodate par comptage).
+            # Les threads de sortie sont liés à CET encodeur (stop) : à sa mort ils s'arrêtent avant la relance,
+            # sinon un ancien thread continuait à consommer une image sur deux (motif doublon / saut du 25/09).
+            stop = threading.Event()
+            socks = []
+            tv = ta = None
+            try:
+                cv = self.accept_while_alive(srv_v, enc)
+                if cv is None:
+                    raise OSError("encodeur parti avant de se connecter")
+                cv.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)
+                t0 = time.perf_counter()
+                socks.append(cv)
+                tv = threading.Thread(target=self.video_out, args=(cv, t0, socks, stop), daemon=True)
+                tv.start()
+                ca = self.accept_while_alive(srv_a, enc)
+                if ca is None:
+                    raise OSError("encodeur parti avant de se connecter (son)")
+                ca.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
+                socks.append(ca)
+                log(f"encodeur connecté : sortie continue vers udp://127.0.0.1:{self.a.obs_port} (OBS)")
+                ta = threading.Thread(target=self.audio_out, args=(ca, t0, socks, silence, stop), daemon=True)
+                ta.start()
+                enc.wait()
+            except OSError as e:
+                log(f"encodeur : {e}")
+            finally:
+                stop.set()
+                self._close_all(socks)
+                for t in (tv, ta):
+                    if t is not None:
+                        t.join(3)
+                if enc.poll() is None:
+                    enc.kill()
             log("encodeur arrêté, relance dans 1 s")
             time.sleep(1)
+
+    @staticmethod
+    def accept_while_alive(srv, proc):
+        """accept() par tranches d'1 s tant que l'encodeur vit ; None s'il est mort avant de se connecter."""
+        while proc.poll() is None:
+            try:
+                conn, _ = srv.accept()
+                return conn
+            except socket.timeout:
+                continue
+        return None
 
     def read_encoder_log(self, pipe):
         for line in iter(pipe.readline, b""):
@@ -818,11 +850,11 @@ class Receiver:
             except OSError:
                 pass
 
-    def video_out(self, cv, t0, socks):
+    def video_out(self, cv, t0, socks, stop):
         period = 1.0 / self.fps
         next_v = t0
         try:
-            while True:
+            while not stop.is_set():
                 now = time.perf_counter()
                 if now < next_v:
                     time.sleep(next_v - now)
@@ -832,10 +864,10 @@ class Receiver:
         except OSError:
             self._close_all(socks)
 
-    def audio_out(self, ca, t0, socks, silence):
+    def audio_out(self, ca, t0, socks, silence, stop):
         next_a = t0
         try:
-            while True:
+            while not stop.is_set():
                 now = time.perf_counter()
                 if now < next_a:
                     time.sleep(next_a - now)
