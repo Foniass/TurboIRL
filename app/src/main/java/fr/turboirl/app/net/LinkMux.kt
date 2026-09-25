@@ -203,7 +203,7 @@ class LinkMux(
                 misses = 0
                 if (suspect && streak >= RECOVER_PONGS) {
                     suspect = false
-                    logger.log("Lien $name rétabli (RTT ${rttMs.toInt()} ms)")
+                    if (links.size > 1) logger.log("Lien $name rétabli (RTT ${rttMs.toInt()} ms)")
                 }
             }
         }
@@ -422,7 +422,8 @@ class LinkMux(
                         }
                         replayed += replay.size
                         logger.log("Lien ${link.name} suspect (${link.misses} pings sans réponse) : ${replay.size} paquets de la dernière seconde renvoyés par ${o.name}")
-                    } else {
+                    } else if (links.size > 1) {
+                        // single link: every 5G hiccup would fill the journal with suspect/rétabli pairs for nothing
                         logger.log("Lien ${link.name} suspect (${link.misses} pings sans réponse)" + if (others.isEmpty()) ", aucun autre lien" else "")
                     }
                 }

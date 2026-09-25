@@ -329,6 +329,9 @@ class App:
                 total = receiver.euros(o.get("total", 0)) + (f" / {receiver.euros(goal)}" if o.get("goalEnabled") and goal else "")
                 cur = o.get("current")
                 txt = f"{o.get('count', 0)} finie(s) · total {total}" + (f" · #{cur.get('id')} en cours ({receiver.euros(cur.get('price', 0))})" if cur else "")
+                ov = self.receiver.overlay if self.receiver is not None else None
+                if ov is not None and ov.order_delay_s:
+                    txt += f" · OBS décalé de {ov.order_delay_s:.0f} s"
                 self.set("orders", txt, GREEN if cur else GREY)
             else:
                 self.set("orders", "…", GREY)

@@ -275,8 +275,10 @@ class MainActivity : Activity() {
         ws.javaScriptEnabled = true
         ws.domStorageEnabled = true
         ws.mediaPlaybackRequiresUserGesture = true
-        // the Twitch popout chat (and its login page) exist on the desktop site only
-        ws.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+        // the Twitch popout chat (and its login page) exist on the desktop site only; the login page also rejects
+        // browsers it finds too old, so the Chrome version is the installed WebView's own (kept current by Play)
+        val chrome = Regex("Chrome/(\\d+)").find(ws.userAgentString)?.groupValues?.get(1) ?: "140"
+        ws.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chrome.0.0.0 Safari/537.36"
         android.webkit.CookieManager.getInstance().setAcceptCookie(true)
         android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(chat, true)
         chat.webViewClient = android.webkit.WebViewClient()
@@ -333,6 +335,8 @@ class MainActivity : Activity() {
             }
             body.put("action", "start").put("price", price)
         }
+        // the PC delays the OBS texts by the video delay; the phone → VPS SRT buffer is its biggest part
+        body.put("latencyMs", config.srtLatencyMs)
         orderBusy = true
         orderGo.isEnabled = false
         Uploader.postOrders(config.vpsUrl, token, body) { r ->

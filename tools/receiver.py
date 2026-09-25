@@ -78,6 +78,7 @@ class ObsControl:
         self.receiver = receiver
         self.last_status = {}      # dernier état envoyé au VPS (lu par la fenêtre du logiciel PC)
         self.orders = None         # état des commandes de livraison (API du VPS), affiché dans OBS
+        self.orders_offset = 0.0   # horloge du serveur − horloge du PC, d'après le champ now de l'API
         self.last_command = ""     # dernière commande du téléphone et son résultat
         self.api_ok = None         # None = jamais joint, True/False = dernier appel
         self.last_id = 0
@@ -144,24 +145,30 @@ class ObsControl:
                 pass
             time.sleep(3)
 
+    def set_orders(self, st):
+        self.orders = st
+        now = iso_epoch(st.get("now") or "") if st else None
+        if now is not None:
+            self.orders_offset = now - time.time()
+
     def orders_loop(self):
-        """Commandes : relevées toutes les 3 s, textes OBS rafraîchis chaque seconde (durée en cours)."""
-        n = 0
+        """Commandes : état + historique daté relevés chaque seconde, textes OBS décalés du délai vidéo."""
         while True:
             try:
-                if n % 3 == 0:
-                    self.orders = self.api("GET", "/api/turboirl/orders")
-                ov = self.receiver.overlay if self.receiver is not None else None
-                if ov is not None:
-                    ov.apply_orders(self.orders)
+                self.set_orders(self.api("GET", "/api/turboirl/orders"))
             except Exception:
                 pass
-            n += 1
+            try:
+                ov = self.receiver.overlay if self.receiver is not None else None
+                if ov is not None:
+                    ov.apply_orders(self.orders, time.time() + self.orders_offset)
+            except Exception:
+                pass
             time.sleep(1)
 
     def post_orders(self, body):
         """Depuis la fenêtre du logiciel PC : effacer, régler l'objectif."""
-        self.orders = self.api("POST", "/api/turboirl/orders", body)
+        self.set_orders(self.api("POST", "/api/turboirl/orders", body))
         return self.orders
 
     def execute(self, action):
@@ -237,6 +244,29 @@ ORDER_TEXTS = [
 ]
 CURRENT_TEXTS = ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps")
 SHOW_DELAY_S = 1.5   # OBS relit les fichiers environ chaque seconde : on n'affiche qu'une fois le nouveau contenu lu
+time.strptime("2000-01-01", "%Y-%m-%d")  # charge _strptime une fois (premier appel non sûr entre threads)
+
+
+def iso_epoch(s):
+    """Date ISO de l'API (UTC, « 2026-09-25T20:19:17.042Z ») → secondes epoch, ou None."""
+    try:
+        t = calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S"))
+        frac = s[19:].rstrip("Z")
+        return t + (float(frac) if frac.startswith(".") else 0.0)
+    except Exception:
+        return None
+
+
+def state_at(history, t, fallback):
+    """État des commandes en vigueur à l'instant t (heure du serveur) d'après l'historique daté de l'API."""
+    best = None
+    for h in history:
+        at = iso_epoch(h.get("at") or "")
+        if at is not None and at <= t:
+            best = h
+    if best is None:
+        best = history[0] if history else fallback
+    return best
 
 
 def euros(v):
@@ -309,8 +339,8 @@ class ObsOverlay:
         self.last_error = ""
         self.texts = {}          # nom de source texte → id d'élément dans la scène
         self.text_state = {}     # nom → (texte, visible) déjà envoyés à OBS
-        self.current_id = None   # commande en cours affichée ; None = textes masqués
-        self.show_at = None      # heure à laquelle afficher les textes de la commande en cours
+        self.phone_latency_ms = 0   # tampon SRT du téléphone, transmis avec chaque commande (0 = inconnu → 12 s)
+        self.order_delay_s = 0.0    # décalage appliqué aux textes des commandes (délai GoPro → OBS estimé)
         # la connexion OBS est utilisée par le thread du gel et par celui des commandes : jamais deux requêtes à la
         # fois (25/09 : trames entremêlées, client bloqué, reconnexions en boucle qui figeaient OBS)
         self.lock = threading.RLock()
@@ -480,39 +510,48 @@ class ObsOverlay:
                 obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": shown})
             self.text_state[name] = (text, shown)
 
-    def apply_orders(self, st):
-        """État des commandes (API du VPS) → textes OBS."""
+    def order_delay(self):
+        """Délai GoPro → OBS estimé, appliqué aux textes des commandes pour qu'ils changent avec l'image de l'appui :
+        tampon SRT téléphone → VPS (livraison à heure fixe), latence SRT VPS → PC, son en réserve dans le répéteur
+        (mesuré), plus une constante pour la GoPro, le transcodage du téléphone et la source média d'OBS."""
+        r = self.r
+        phone = (self.phone_latency_ms or 12000) / 1000
+        relay = r.a.relay_latency_ms / 1000 if r.a.relay_token else 0.0
+        queued = r.fifo_len / (r.rate * r.bps) if r.audio_started else r.a.prefill_ms / 1000
+        return phone + relay + queued + r.a.order_extra_ms / 1000
+
+    def apply_orders(self, st, server_now):
+        """État des commandes (API du VPS, avec historique daté) → textes OBS, décalés du délai vidéo.
+
+        Le contenu (fichiers relus par OBS) est pris SHOW_DELAY_S en avance sur la visibilité, pour qu'OBS l'ait
+        relu au moment où le texte apparaît (sinon l'ancienne commande apparaissait quelques dixièmes de seconde).
+        Le chrono se calcule sur l'horloge du serveur : celle du PC n'entre pas en jeu."""
         if self.obs is None or not st:
             return
         with self.lock:
           try:
-            goal = st.get("goal")
-            total = euros(st.get("total", 0))
-            if st.get("goalEnabled") and goal:
+            history = st.get("history") or []
+            self.phone_latency_ms = int(st.get("phoneLatencyMs") or 0) or self.phone_latency_ms
+            self.order_delay_s = self.order_delay()
+            t_disp = server_now - self.order_delay_s
+            visible = state_at(history, t_disp, st)
+            content = state_at(history, t_disp + SHOW_DELAY_S, st)
+            goal = content.get("goal")
+            total = euros(content.get("total", 0))
+            if content.get("goalEnabled") and goal:
                 total += " / " + euros(goal)
-            self.set_text("TurboIRL commandes", str(st.get("count", 0)), True)
+            self.set_text("TurboIRL commandes", str(content.get("count", 0)), True)
             self.set_text("TurboIRL total", total, True)
-            cur = st.get("current")
+            vcur = visible.get("current")
+            cur = content.get("current") or vcur   # commande qui finit : visible jusqu'au bout de son délai
             if cur:
-                started = cur.get("startedAt", "")
-                try:
-                    t0 = calendar.timegm(time.strptime(started[:19], "%Y-%m-%dT%H:%M:%S"))  # heure UTC de l'API
-                    elapsed = max(0, int(time.time() - t0))
-                except Exception:
-                    elapsed = 0
-                now = time.time()
-                if cur.get("id") != self.current_id:
-                    # nouvelle commande : contenu écrit d'abord, affichage un peu après pour qu'OBS ait relu les
-                    # fichiers (sinon l'ancienne commande apparaissait quelques dixièmes de seconde)
-                    self.current_id = cur.get("id")
-                    self.show_at = now + SHOW_DELAY_S
-                shown = self.show_at is not None and now >= self.show_at
+                t0 = iso_epoch(cur.get("startedAt") or "")
+                elapsed = max(0, int(t_disp - t0)) if t0 is not None else 0
+                shown = bool(vcur) and vcur.get("id") == cur.get("id")
                 self.set_text("TurboIRL commande titre", f"Commande #{cur.get('id', '?')}", shown)
                 self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), shown)
                 self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), shown)
             else:
-                self.current_id = None
-                self.show_at = None
                 for name in CURRENT_TEXTS:
                     self.set_text(name, "", False)
           except Exception as e:
@@ -1131,6 +1170,8 @@ def parse_args(argv=None):
     # 24/09 soir (relais VPS) : la liaison caméra → téléphone (Wi-Fi du hotspot) se coupe 1 à 2 s de temps en temps,
     # et rien ne peut tamponner ça en amont ; 2500 ms de réserve couvrent ces trous sans silence (délai +1,3 s)
     ap.add_argument("--prefill-ms", type=int, default=2500)
+    ap.add_argument("--order-extra-ms", type=int, default=2000,
+                    help="part fixe du délai GoPro → OBS (GoPro, transcodage téléphone, source média OBS) pour décaler les textes des commandes")
     ap.add_argument("--max-ms", type=int, default=8000)
     ap.add_argument("--slack-ms", type=int, default=1500)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",
