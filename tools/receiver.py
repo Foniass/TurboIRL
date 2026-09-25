@@ -243,7 +243,7 @@ SCENE_NAME = "TurboIRL"          # scène OBS dédiée : créée si absente, le 
 ORDER_TEXTS = [
     ("TurboIRL commandes", "0", 24.0, 90.0, True),
     ("TurboIRL total", "0 €", 24.0, 140.0, True),
-    ("TurboIRL commande titre", "Commande #1", 24.0, 200.0, False),
+    ("TurboIRL commande titre", "COMMANDE #1", 24.0, 200.0, False),
     ("TurboIRL commande prix", "0 €", 24.0, 250.0, False),
     ("TurboIRL commande temps", "00:00", 24.0, 300.0, False),
 ]
@@ -553,7 +553,7 @@ class ObsOverlay:
                 t0 = iso_epoch(cur.get("startedAt") or "")
                 elapsed = max(0, int(t_disp - t0)) if t0 is not None else 0
                 shown = bool(vcur) and vcur.get("id") == cur.get("id")
-                self.set_text("TurboIRL commande titre", f"Commande #{cur.get('id', '?')}", shown)
+                self.set_text("TurboIRL commande titre", f"COMMANDE #{cur.get('id', '?')}", shown)
                 self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), shown)
                 self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), shown)
             else:
