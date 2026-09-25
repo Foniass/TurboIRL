@@ -229,12 +229,14 @@ TS_PACKET = 188
 SCENE_NAME = "TurboIRL"          # scène OBS dédiée : créée si absente, le reste de l'OBS n'est jamais touché
 # Textes des commandes de livraison (créés s'ils manquent, contenu et visibilité pilotés ici, style et position libres)
 ORDER_TEXTS = [
-    ("TurboIRL commandes", "Commandes : 0", 24.0, 90.0, True),
-    ("TurboIRL total", "Total : 0 €", 24.0, 140.0, True),
-    ("TurboIRL commande titre", "Commande #1 en cours", 24.0, 200.0, False),
+    ("TurboIRL commandes", "0", 24.0, 90.0, True),
+    ("TurboIRL total", "0 €", 24.0, 140.0, True),
+    ("TurboIRL commande titre", "Commande #1", 24.0, 200.0, False),
     ("TurboIRL commande prix", "0 €", 24.0, 250.0, False),
     ("TurboIRL commande temps", "00:00", 24.0, 300.0, False),
 ]
+CURRENT_TEXTS = ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps")
+SHOW_DELAY_S = 1.5   # OBS relit les fichiers environ chaque seconde : on n'affiche qu'une fois le nouveau contenu lu
 
 
 def euros(v):
@@ -307,6 +309,8 @@ class ObsOverlay:
         self.last_error = ""
         self.texts = {}          # nom de source texte → id d'élément dans la scène
         self.text_state = {}     # nom → (texte, visible) déjà envoyés à OBS
+        self.current_id = None   # commande en cours affichée ; None = textes masqués
+        self.show_at = None      # heure à laquelle afficher les textes de la commande en cours
         # la connexion OBS est utilisée par le thread du gel et par celui des commandes : jamais deux requêtes à la
         # fois (25/09 : trames entremêlées, client bloqué, reconnexions en boucle qui figeaient OBS)
         self.lock = threading.RLock()
@@ -486,8 +490,8 @@ class ObsOverlay:
             total = euros(st.get("total", 0))
             if st.get("goalEnabled") and goal:
                 total += " / " + euros(goal)
-            self.set_text("TurboIRL commandes", f"Commandes : {st.get('count', 0)}", True)
-            self.set_text("TurboIRL total", f"Total : {total}", True)
+            self.set_text("TurboIRL commandes", str(st.get("count", 0)), True)
+            self.set_text("TurboIRL total", total, True)
             cur = st.get("current")
             if cur:
                 started = cur.get("startedAt", "")
@@ -496,12 +500,21 @@ class ObsOverlay:
                     elapsed = max(0, int(time.time() - t0))
                 except Exception:
                     elapsed = 0
-                self.set_text("TurboIRL commande titre", f"Commande #{cur.get('id', '?')} en cours", True)
-                self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), True)
-                self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), True)
+                now = time.time()
+                if cur.get("id") != self.current_id:
+                    # nouvelle commande : contenu écrit d'abord, affichage un peu après pour qu'OBS ait relu les
+                    # fichiers (sinon l'ancienne commande apparaissait quelques dixièmes de seconde)
+                    self.current_id = cur.get("id")
+                    self.show_at = now + SHOW_DELAY_S
+                shown = self.show_at is not None and now >= self.show_at
+                self.set_text("TurboIRL commande titre", f"Commande #{cur.get('id', '?')}", shown)
+                self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), shown)
+                self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), shown)
             else:
-                for name in ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps"):
-                    self.set_text(name, self.text_state.get(name, ("", False))[0] or "-", False)
+                self.current_id = None
+                self.show_at = None
+                for name in CURRENT_TEXTS:
+                    self.set_text(name, "", False)
           except Exception as e:
             log(f"OBS : textes des commandes indisponibles ({e})")
             self.obs = None
