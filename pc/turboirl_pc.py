@@ -137,15 +137,17 @@ class Updater:
         if not os.path.isfile(os.path.join(inner, "TurboIRL.exe")):
             self.status("mise à jour : archive inattendue, ignorée", RED)
             return False
-        # le remplacement se fait une fois ce programme terminé, par un script détaché qui relance la nouvelle version
-        cmd = os.path.join(tmp, "update.cmd")
-        with open(cmd, "w", encoding="cp1252", errors="replace") as f:
-            f.write("@echo off\r\n"
-                    "timeout /t 3 /nobreak >nul\r\n"
-                    f'robocopy "{inner}" "{APP_DIR}" /MIR /R:30 /W:1 /NFL /NDL /NJH /NJS >nul\r\n'
-                    f'start "" "{os.path.join(APP_DIR, "TurboIRL.exe")}"\r\n'
-                    f'rmdir /s /q "{tmp}"\r\n')
-        subprocess.Popen(["cmd", "/c", "start", "/min", "", cmd], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        # le remplacement se fait une fois ce programme terminé, par un script PowerShell détaché (UTF-8 avec BOM :
+        # un .cmd est lu dans la page de code OEM et un chemin accentué comme C:\Users\Kévin y devenait introuvable)
+        # qui relance la nouvelle version
+        ps1 = os.path.join(tmp, "update.ps1")
+        with open(ps1, "w", encoding="utf-8-sig") as f:
+            f.write("Start-Sleep -Seconds 3\n"
+                    f"robocopy '{inner}' '{APP_DIR}' /MIR /R:30 /W:1 /NFL /NDL /NJH /NJS | Out-Null\n"
+                    f"Start-Process -FilePath '{os.path.join(APP_DIR, 'TurboIRL.exe')}' -WorkingDirectory '{APP_DIR}'\n"
+                    f"Remove-Item -Recurse -Force '{tmp}' -ErrorAction SilentlyContinue\n")
+        subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1],
+                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         self.status(f"mise à jour {target} prête : redémarrage…", ORANGE)
         return True
 
