@@ -19,7 +19,7 @@ import java.util.concurrent.TimeUnit
  */
 object TwitchAuth {
     /** Twitch application registered at dev.twitch.tv/console/apps (client type « Public »). Empty = sign-in off. */
-    const val CLIENT_ID = ""
+    const val CLIENT_ID = "k6q6nj31qrhg82oy08hp6kd9e49wvl"
     const val SCOPES = "chat:read chat:edit"
 
     class DeviceCode(val deviceCode: String, val userCode: String, val verificationUri: String, val intervalS: Int, val expiresInS: Int)
