@@ -40,6 +40,12 @@ class VideoTranscoder(
     private var queued = 0L
     private var outputCallbacks = 0L
     private var emptyOutputs = 0L
+    // Silent-decoder watchdog: a decoder that eats frames without ever producing one is retried differently
+    // (no low-latency flag, then the software decoder). Seen 25/09 on a Nothing A015 with the bench video.
+    private var decoderStrategy = 0
+    private var decoderSinceNs = 0L
+    private var queuedAtStart = 0L
+    private var outputsAtStart = 0L
 
     class Stats {
         /** 1 = every frame, 2 = 15 i/s, 6 = 5 i/s, 30 = 1 i/s. */
@@ -187,6 +193,33 @@ class VideoTranscoder(
         return w to h
     }
 
+    private val decoderWatchdog = object : Runnable {
+        override fun run() {
+            val dec = decoder ?: return
+            val consumed = queued - queuedAtStart
+            val produced = outputCallbacks - outputsAtStart
+            if (System.nanoTime() - decoderSinceNs > 5_000_000_000L && consumed >= 45 && produced == 0L) {
+                if (decoderStrategy < 2) {
+                    decoderStrategy++
+                    logger.log("Décodeur ${dec.name} muet ($consumed images consommées, aucune sortie) : nouvel essai " +
+                        if (decoderStrategy == 1) "sans mode basse latence" else "avec le décodeur logiciel")
+                    releaseCodecs()
+                    restartCodecs("décodeur muet")
+                    return
+                }
+                logger.log("Décodeur ${dec.name} muet malgré les essais ($consumed images consommées)")
+                return
+            }
+            handler.postDelayed(this, 3000)
+        }
+    }
+
+    private fun softwareDecoderName(): String? =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.firstOrNull { info ->
+            !info.isEncoder && info.supportedTypes.any { it.equals(MIME, ignoreCase = true) } &&
+                (info.name.contains("android", ignoreCase = true) || info.name.contains("google", ignoreCase = true) || info.name.startsWith("OMX.google"))
+        }?.name
+
     private fun restartCodecs(reason: String) {
         releaseCodecs()
         val s = sps ?: return
@@ -197,17 +230,24 @@ class VideoTranscoder(
             sc.onFrameConsumed = { handler.post { inFlightSinceNs = 0L; pumpDecoded() } }
             createEncoder()
 
-            val dec = MediaCodec.createDecoderByType(MIME)
+            val software = if (decoderStrategy >= 2) softwareDecoderName() else null
+            val dec = if (software != null) MediaCodec.createByCodecName(software) else MediaCodec.createDecoderByType(MIME)
             val decFormat = MediaFormat.createVideoFormat(MIME, inWidth, inHeight).apply {
                 setByteBuffer("csd-0", ByteBuffer.wrap(START_CODE + s))
                 setByteBuffer("csd-1", ByteBuffer.wrap(START_CODE + p))
-                if (Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                if (Build.VERSION.SDK_INT >= 30 && decoderStrategy == 0) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
             dec.setCallback(decoderCallback, handler)
             dec.configure(decFormat, sc.inputSurface, null, 0)
             dec.start()
             decoder = dec
-            logger.log("Décodeur ${dec.name} configuré (${inWidth}x$inHeight, SPS ${s.size} o, PPS ${p.size} o)")
+            decoderSinceNs = System.nanoTime()
+            queuedAtStart = queued
+            outputsAtStart = outputCallbacks
+            handler.removeCallbacks(decoderWatchdog)
+            handler.postDelayed(decoderWatchdog, 3000)
+            logger.log("Décodeur ${dec.name} configuré (${inWidth}x$inHeight, SPS ${s.size} o, PPS ${p.size} o" +
+                (if (decoderStrategy == 1) ", sans mode basse latence" else if (decoderStrategy >= 2) ", logiciel" else "") + ")")
             awaitingKeyframe = true
             failures = 0
             logger.log("Réencodage démarré : $reason → ${outWidth}x${stats.height} à ${targetKbps} kb/s (${encoder?.name})")
