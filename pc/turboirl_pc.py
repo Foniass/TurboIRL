@@ -146,8 +146,10 @@ class Updater:
                     f"robocopy '{inner}' '{APP_DIR}' /MIR /R:30 /W:1 /NFL /NDL /NJH /NJS | Out-Null\n"
                     f"Start-Process -FilePath '{os.path.join(APP_DIR, 'TurboIRL.exe')}' -WorkingDirectory '{APP_DIR}'\n"
                     f"Remove-Item -Recurse -Force '{tmp}' -ErrorAction SilentlyContinue\n")
+        # console cachée obligatoire : lancé « détaché » (sans console) depuis ce programme sans fenêtre, powershell
+        # se terminait aussitôt sans rien exécuter (2.10)
         subprocess.Popen(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps1],
-                         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+                         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP)
         self.status(f"mise à jour {target} prête : redémarrage…", ORANGE)
         return True
 
