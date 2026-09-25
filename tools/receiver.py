@@ -239,6 +239,25 @@ ORDER_TEXTS = [
 
 def euros(v):
     return ("%.2f" % float(v)).replace(".", ",").replace(",00", "") + " €"
+
+
+# Les textes des commandes changent chaque seconde (durée) : ils sont écrits dans des fichiers qu'OBS lit lui-même
+# (« lire depuis un fichier »), jamais poussés par WebSocket — 25/09 : SetInputSettings chaque seconde figeait puis
+# faisait planter OBS 32 (source texte GDI+). Le WebSocket ne sert plus qu'à la visibilité, rare.
+OBS_TEXT_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "TurboIRL", "obs")
+
+
+def text_file(name):
+    return os.path.join(OBS_TEXT_DIR, name.replace("TurboIRL ", "").replace(" ", "_") + ".txt")
+
+
+def write_text_file(name, text):
+    os.makedirs(OBS_TEXT_DIR, exist_ok=True)
+    p = text_file(name)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, p)
 MEDIA_NAME = "TurboIRL flux"     # source média qui lit le récepteur (une source existante sur la même URL est adoptée)
 
 
@@ -323,7 +342,7 @@ class ObsOverlay:
         self.texts = {}
         self.text_state = {}
         for name, default, x, y, shown in ORDER_TEXTS:
-            item_id, ch = self.ensure_text_source(obs, name, default, x, y, shown)
+            item_id, ch = self.ensure_text_source(obs, name, default, x, y, shown, from_file=True)
             self.texts[name] = item_id
             fixed += ch
         self.obs = obs
@@ -383,11 +402,14 @@ class ObsOverlay:
         item_id, fixed = self.ensure_text_source(obs, self.source, self.text, 24.0, 24.0, False, label="message de coupure")
         return (SCENE_NAME, item_id), fixed
 
-    def ensure_text_source(self, obs, name, default_text, x, y, shown, label=None):
+    def ensure_text_source(self, obs, name, default_text, x, y, shown, label=None, from_file=False):
         """Une source texte dans la scène TurboIRL : créée si absente (style par défaut lisible), ajoutée à la scène si
-        elle existe ailleurs, texte remis si vide, replacée si hors cadre, au-dessus du flux. Style et position libres."""
+        elle existe ailleurs, texte remis si vide, replacée si hors cadre, au-dessus du flux. Style et position libres.
+        from_file : le contenu vient d'un fichier écrit par ce programme (textes des commandes)."""
         label = label or name
         fixed = []
+        if from_file:
+            write_text_file(name, default_text)
         try:
             item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": name})["sceneItemId"]
         except RuntimeError:
@@ -403,13 +425,21 @@ class ObsOverlay:
                     raise RuntimeError("aucune source texte disponible dans cet OBS")
                 settings = {"text": default_text, "font": {"face": "Segoe UI", "size": 40, "style": "Bold", "flags": 1},
                             "color": 0xFFFFFFFF, "outline": True, "outline_color": 0xFF000000, "outline_size": 6, "outline_opacity": 100}
+                if from_file:
+                    settings.update(self.file_settings(kind, name))
                 item_id = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": name, "inputKind": kind,
                                                       "inputSettings": settings, "sceneItemEnabled": shown})["sceneItemId"]
                 fixed.append(f"{label} créé")
             obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
                                                   "sceneItemTransform": {"positionX": x, "positionY": y}})
-        cur = obs.request("GetInputSettings", {"inputName": name}).get("inputSettings", {})
-        if not str(cur.get("text", "")).strip():
+        cur = obs.request("GetInputSettings", {"inputName": name})
+        settings_now = cur.get("inputSettings", {})
+        if from_file:
+            want = self.file_settings(cur.get("inputKind", "text_gdiplus_v3"), name)
+            if any(settings_now.get(k) != v for k, v in want.items()):
+                obs.request("SetInputSettings", {"inputName": name, "inputSettings": want, "overlay": True})
+                fixed.append(f"{label} : lecture depuis fichier")
+        elif not str(settings_now.get("text", "")).strip():
             obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": default_text}, "overlay": True})
             fixed.append(f"{label} : texte remis")
         video = obs.request("GetVideoSettings")
@@ -422,8 +452,16 @@ class ObsOverlay:
         obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": max(n - 1, 0)})
         return item_id, fixed
 
+    @staticmethod
+    def file_settings(kind, name):
+        """Réglages « lire depuis un fichier » selon le type de source texte."""
+        path = text_file(name)
+        if kind.startswith("text_ft2"):
+            return {"from_file": True, "text_file": path}
+        return {"read_from_file": True, "file": path}
+
     def set_text(self, name, text, shown):
-        """Contenu et visibilité d'un texte des commandes, envoyés seulement s'ils changent."""
+        """Contenu (fichier lu par OBS) et visibilité (WebSocket) d'un texte des commandes, seulement s'ils changent."""
         with self.lock:
             obs = self.obs
             item_id = self.texts.get(name)
@@ -433,7 +471,7 @@ class ObsOverlay:
             if prev == (text, shown):
                 return
             if prev is None or prev[0] != text:
-                obs.request("SetInputSettings", {"inputName": name, "inputSettings": {"text": text}, "overlay": True})
+                write_text_file(name, text)
             if prev is None or prev[1] != shown:
                 obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": shown})
             self.text_state[name] = (text, shown)
