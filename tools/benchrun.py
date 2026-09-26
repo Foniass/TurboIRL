@@ -27,10 +27,12 @@ def main():
     ap.add_argument("--seconds", type=int, default=90)
     ap.add_argument("--warmup", type=int, default=25, help="secondes avant de mesurer (connexion, 12 s de latence)")
     ap.add_argument("--latency", type=int, default=12000)
+    ap.add_argument("--vps", default="", help="hôte du service bond (défaut : celui de bondclient ; 127.0.0.1 = bond local de mise au point)")
     a = ap.parse_args()
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     bond_log = open(os.path.join(ROOT, "dumps", "bench-bond.log"), "w", encoding="utf-8")
-    bond = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "bondclient.py")] + sum((["--link", l] for l in a.link), []),
+    bond = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "bondclient.py")] + sum((["--link", l] for l in a.link), [])
+                            + (["--vps", a.vps] if a.vps else []),
                             stdout=bond_log, stderr=subprocess.STDOUT, env=env)
     time.sleep(1)
     ff = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-re", "-stream_loop", "-1",

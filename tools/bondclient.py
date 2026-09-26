@@ -7,8 +7,12 @@ l'appli (LinkMux.kt) : sert à valider le service et la politique de répartitio
   python tools/bondclient.py --link "5G,share=0.6,loss=0.02" --link "wifi,share=0.4,outage=60/8"
 
 Options d'un lien : name,share=0.6,loss=0.05 (proportion de datagrammes perdus),delay=200 (ms ajoutées),
-kbps=3000 (plafond de débit, file de 500 ms puis pertes),outage=60/8 (toutes les 60 s, coupure de 8 s),seed=1
+kbps=3000 (débit du goulot : les paquets attendent leur tour dans une file, comme sur une cellule saturée),
+queue=500 (longueur maximale de cette file en ms, pertes au-delà ; 2000-4000 = bufferbloat réel),
+outage=60/8 (toutes les 60 s, coupure de 8 s),seed=1
+Variable d'environnement TURBOIRL_NOCAP=1 : sans le plafond de débit par lien (comportement d'avant la 2.19, pour comparer).
 """
+import os
 import argparse
 import collections
 import heapq
@@ -27,6 +31,9 @@ SUSPECT_MISSES = 3
 RECOVER_PONGS = 5
 REPLAY_S = 1.0          # à la chute d'un lien : la dernière seconde envoyée dessus repart sur les autres
 VIDEO_PID, AUDIO_PID = 0x100, 0x101
+CAP_MAX, CAP_MIN = 100_000, 300   # kb/s : plafond « sans limite » d'un lien, plancher du plafond
+NOCAP = os.environ.get("TURBOIRL_NOCAP") == "1"
+NAKSHARE = os.environ.get("TURBOIRL_NAKSHARE", "1") == "1"   # 0 : part non réduite par les pertes annoncées en NAK
 
 
 def log(msg):
@@ -92,6 +99,16 @@ class Link:
         self.loss = float(opts.get("loss", 0))
         self.delay = float(opts.get("delay", 0)) / 1000
         self.kbps = float(opts.get("kbps", 0))
+        self.queue_s = float(opts.get("queue", 500)) / 1000
+        self.queue_until = 0.0                 # heure à laquelle le goulot simulé aura fini d'écouler ce qui attend
+        # plafond de débit contre le bufferbloat (même logique que LinkMux.kt 2.19)
+        self.base_rtt = 0.0
+        self.congested = False
+        self.cap_kbps = CAP_MAX
+        self.clear_since = 0.0
+        self.last_cap_change = 0.0
+        self.sends = collections.deque()       # (heure, octets) de la dernière seconde
+        self.window_bytes = 0
         o = opts.get("outage")
         self.outage = tuple(float(x) for x in o.split("/")) if o else None
         self.rng = random.Random(int(opts.get("seed", lid + 1)))
@@ -121,17 +138,26 @@ class Link:
         every, dur = self.outage
         return (now - self.t0) % every >= every - dur
 
+    def rate_kbps(self, now):
+        while self.sends and now - self.sends[0][0] > 1.0:
+            self.window_bytes -= self.sends.popleft()[1]
+        return self.window_bytes * 8 / 1000
+
     def impaired_send(self, pkt, now):
+        self.sends.append((now, len(pkt)))
+        self.window_bytes += len(pkt)
         if self.down(now) or (self.loss and self.rng.random() < self.loss):
             return
+        release = now + (self.delay + self.rng.random() * self.delay * 0.2 if self.delay else 0.0)
         if self.kbps:
-            self.bucket = min(self.bucket + (now - self.bucket_at) * self.kbps * 125, self.kbps * 125 * 0.5)
-            self.bucket_at = now
-            if self.bucket < len(pkt):
-                return  # file de 500 ms pleine : perdu
-            self.bucket -= len(pkt)
-        if self.delay:
-            heapq.heappush(self.queue, (now + self.delay + self.rng.random() * self.delay * 0.2, pkt))
+            service = len(pkt) * 8 / (self.kbps * 1000)
+            self.queue_until = max(self.queue_until, now) + service
+            if self.queue_until - now > self.queue_s:
+                self.queue_until -= service
+                return  # file du goulot pleine : perdu
+            release = self.queue_until + (release - now)
+        if release > now + 1e-4:
+            heapq.heappush(self.queue, (release, pkt))
         else:
             self._raw_send(pkt)
 
@@ -170,6 +196,35 @@ class Link:
         self.streak += 1
         if self.suspect and self.streak >= RECOVER_PONGS:
             self.suspect = False
+        rtt = (now - sent) * 1000
+        self.base_rtt = rtt if not self.base_rtt or rtt < self.base_rtt else self.base_rtt + (rtt - self.base_rtt) * 0.01
+        if not NOCAP:
+            self.update_congestion(now)
+
+    def update_congestion(self, now):
+        base = self.base_rtt
+        high = self.rtt_ms > base + max(120.0, base)
+        low = self.rtt_ms < base + max(60.0, base * 0.5)
+        if high:
+            self.clear_since = 0.0
+            if now - self.last_cap_change > 1.0:
+                cap = max(CAP_MIN, int(min(self.cap_kbps, max(self.rate_kbps(now), 1)) * 0.7))
+                self.last_cap_change = now
+                if not self.congested:
+                    self.congested = True
+                    log(f"{self.name} encombré (RTT {self.rtt_ms:.0f} ms, plancher {base:.0f} ms) : vidéo plafonnée à {cap} kb/s")
+                self.cap_kbps = cap
+        elif low:
+            if not self.clear_since:
+                self.clear_since = now
+            if now - self.clear_since > 2.0 and self.cap_kbps < CAP_MAX and now - self.last_cap_change > 1.0:
+                self.cap_kbps = min(CAP_MAX, int(self.cap_kbps * 1.2) + 100)
+                self.last_cap_change = now
+                if self.congested:
+                    self.congested = False
+                    log(f"{self.name} dégagé (RTT {self.rtt_ms:.0f} ms) : plafond {self.cap_kbps} kb/s, relevé de 20 % par seconde")
+        else:
+            self.clear_since = 0.0
 
     def remember(self, payload, now):
         self.recent.append((now, payload))
@@ -189,6 +244,8 @@ class Link:
             return "suspect"
         if self.loss_pct() > 20 or self.rtt_ms > 1500:
             return "dégradé"
+        if self.congested:
+            return "encombré"
         return "ok"
 
     def data_loss_pct(self, now):
@@ -202,6 +259,8 @@ class Link:
 
     def effective_share(self, now):
         """Part visée, réduite quand le lien perd des données (SRT le dit par ses NAK) : 5 % de pertes = moitié."""
+        if not NAKSHARE:
+            return self.share   # comme LinkMux.kt, qui n'apprend pas les pertes par les NAK
         loss = self.data_loss_pct(now)
         return self.share * max(0.0, 1.0 - loss / 10.0)
 
@@ -250,7 +309,7 @@ def main():
                         break
                     libsrt_addr = addr
                     alive = [l for l in links if l.state(now) != "mort"] or links
-                    usable = [l for l in alive if l.state(now) in ("ok", "dégradé")] or alive
+                    usable = [l for l in alive if l.state(now) in ("ok", "dégradé", "encombré")] or alive
                     if audio_only(payload):
                         targets = alive
                         counters["audio"] += 1
@@ -258,9 +317,11 @@ def main():
                         targets = [min(usable, key=Link.score)]
                         counters["retransmis"] += 1
                     else:
-                        healthy = [l for l in usable if l.state(now) == "ok"] or usable
-                        # solde : le lien le plus en retard sur sa part (part réduite s'il perd des données) prend le paquet
+                        healthy = [l for l in usable if l.state(now) in ("ok", "encombré")] or usable
+                        # solde : le lien le plus en retard sur sa part (part réduite s'il perd des données) prend le paquet,
+                        # parmi ceux qui sont sous leur plafond (un lien encombré ne reçoit plus que ce qu'il écoule)
                         candidates = [l for l in healthy if l.effective_share(now) > 0] or healthy
+                        candidates = [l for l in candidates if l.rate_kbps(now) < l.cap_kbps] or candidates
                         best = min(candidates, key=lambda l: l.sent_bytes / max(l.effective_share(now), 1e-6))
                         targets = [best]
                         counters["video"] += 1
@@ -311,7 +372,7 @@ def main():
                 l.ping(sid, now)
                 if l.just_fell:
                     l.just_fell = False
-                    others = [o for o in links if o is not l and o.state(now) in ("ok", "dégradé")]
+                    others = [o for o in links if o is not l and o.state(now) in ("ok", "dégradé", "encombré")]
                     if others and l.recent:
                         # ce qui vient de partir sur le lien tombé repart tout de suite ailleurs, sans attendre SRT
                         o = min(others, key=Link.score)
@@ -330,6 +391,7 @@ def main():
             for l in links:
                 parts.append(f"{l.name} {l.state(now)} RTT {l.rtt_ms:.0f} ms pertes {l.loss_pct():.0f}% (données {l.data_loss_pct(now):.1f}%) "
                              f"{l.sent_bytes / 1e6:.1f} Mo ({100 * l.sent_bytes / tot:.0f}% / cible {100 * l.share:.0f}%)"
+                             + (f" plafond {l.cap_kbps} kb/s" if l.cap_kbps < CAP_MAX else "")
                              + (" COUPURE" if l.down(now) else ""))
             log(" | ".join(parts) + f" | son {counters['audio']} vidéo {counters['video']} retransmis {counters['retransmis']} rejoués {counters['rejoués']} retours {counters['retour']} (+{counters['retour dupliqué']} doublons)")
 
