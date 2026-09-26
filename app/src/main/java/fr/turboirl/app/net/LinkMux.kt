@@ -69,6 +69,14 @@ class LinkMux(
         @Volatile var sentBytes = 0L
         @Volatile var lastPongNs = 0L
         @Volatile var rttMs = 0.0
+        @Volatile var baseRttMs = 0.0        // RTT plancher récent : la référence pour détecter une file qui gonfle
+        @Volatile var congested = false      // RTT bien au-dessus du plancher = le lien met en file (bufferbloat)
+        @Volatile var capKbps = CAP_MAX      // débit vidéo maximal confié à ce lien, abaissé quand il s'encombre
+        private var congestedSinceNs = 0L
+        private var clearSinceNs = 0L
+        private var lastCapChangeNs = 0L
+        private val sends = ArrayDeque<LongArray>()   // [ns, octets] de la dernière seconde
+        private var windowBytes = 0L
         @Volatile var suspect = false
         @Volatile var justFell = false
         var misses = 0
@@ -77,8 +85,7 @@ class LinkMux(
         val recent = ArrayDeque<Pair<Long, ByteArray>>()
         val outQueue = LinkedBlockingQueue<Pair<Long, ByteArray>>()
         val rng = Random(id + 1)
-        var bucket = 0.0
-        var bucketNs = System.nanoTime()
+        var queueUntilNs = 0L
         val t0Ns = System.nanoTime()
         var rateBytes = 0L
         var rateNs = System.nanoTime()
@@ -110,20 +117,39 @@ class LinkMux(
                 return t % o.outageEverySec >= o.outageEverySec - o.outageSec
             }
 
+        /** Bytes sent over the last second (all packet kinds), the figure compared with the cap. */
+        fun rateKbps(): Int {
+            val now = System.nanoTime()
+            synchronized(sends) {
+                while (sends.isNotEmpty() && now - sends.first()[0] > 1_000_000_000L) windowBytes -= sends.removeFirst()[1]
+                return (windowBytes * 8 / 1000).toInt()
+            }
+        }
+
         /** Sends with the simulated faults of test mode (none in normal use). */
         fun send(pkt: ByteArray) {
+            val now = System.nanoTime()
+            synchronized(sends) {
+                sends.addLast(longArrayOf(now, pkt.size.toLong()))
+                windowBytes += pkt.size
+                while (sends.isNotEmpty() && now - sends.first()[0] > 1_000_000_000L) windowBytes -= sends.removeFirst()[1]
+            }
             val o = impair
+            var release = now + o.delayMs * 1_000_000L
             if (o.active) {
                 if (down || (o.lossPct > 0 && rng.nextDouble() * 100 < o.lossPct)) return
                 if (o.kbps > 0) {
-                    val now = System.nanoTime()
-                    bucket = minOf(bucket + (now - bucketNs) / 1e9 * o.kbps * 125, o.kbps * 125 * 0.5)
-                    bucketNs = now
-                    if (bucket < pkt.size) return
-                    bucket -= pkt.size
+                    // a bottleneck with a queue, like a cell: packets wait their turn (RTT grows), dropped only once
+                    // the queue holds 2 s (real bufferbloat, what the cap detection must react to)
+                    val serviceNs = pkt.size * 8_000_000L / o.kbps
+                    queueUntilNs = maxOf(queueUntilNs, now) + serviceNs
+                    if (queueUntilNs - now > 2_000_000_000L) {
+                        queueUntilNs -= serviceNs
+                        return
+                    }
+                    release = queueUntilNs + o.delayMs * 1_000_000L
                 }
             }
-            val release = System.nanoTime() + o.delayMs * 1_000_000L
             outQueue.offer(release to pkt)
         }
 
@@ -197,6 +223,13 @@ class LinkMux(
             val rtt = (now - sentNs) / 1e6
             rttMs = if (rttMs == 0.0) rtt else rttMs * 0.7 + rtt * 0.3
             lastPongNs = now
+            // floor of the RTT: follows drops at once, drifts up slowly (a cell that gets worse for good)
+            baseRttMs = when {
+                baseRttMs == 0.0 -> rtt
+                rtt < baseRttMs -> rtt
+                else -> baseRttMs + (rtt - baseRttMs) * 0.01
+            }
+            updateCongestion(now)
             synchronized(pings) {
                 for (p in pings) if (p[0] == sentNs) p[1] = 1L
                 streak++
@@ -204,6 +237,47 @@ class LinkMux(
                 if (suspect && streak >= RECOVER_PONGS) {
                     suspect = false
                     if (links.size > 1) logger.log("Lien $name rétabli (RTT ${rttMs.toInt()} ms)")
+                }
+            }
+        }
+
+        /**
+         * Bufferbloat control. A link whose RTT climbs well above its floor is queueing our packets (a saturated
+         * cell): everything on it arrives late, the relay asks for retransmissions, and the other link drowns under
+         * them (26/09, home test: output 9-11 Mb/s for 3.5 Mb/s encoded, video held every 2-3 min). So the video
+         * confided to that link is capped: 0.7× its current rate at each second of congestion, raised 20 % per
+         * second once the RTT is back near the floor. The plan split is kept whenever both links have room.
+         */
+        private fun updateCongestion(now: Long) {
+            val base = baseRttMs
+            val high = rttMs > base + maxOf(120.0, base)
+            val low = rttMs < base + maxOf(60.0, base * 0.5)
+            if (high) {
+                clearSinceNs = 0L
+                if (congestedSinceNs == 0L) congestedSinceNs = now
+                if (now - lastCapChangeNs > 1_000_000_000L) {
+                    val cap = maxOf(CAP_MIN, (minOf(capKbps, maxOf(rateKbps(), 1)) * 0.7).toInt())
+                    lastCapChangeNs = now
+                    if (!congested) {
+                        congested = true
+                        logger.log("Lien $name encombré (RTT ${rttMs.toInt()} ms, plancher ${base.toInt()} ms) : vidéo plafonnée à $cap kb/s")
+                    }
+                    capKbps = cap
+                }
+            } else {
+                congestedSinceNs = 0L
+                if (low) {
+                    if (clearSinceNs == 0L) clearSinceNs = now
+                    if (now - clearSinceNs > 2_000_000_000L && capKbps < CAP_MAX && now - lastCapChangeNs > 1_000_000_000L) {
+                        capKbps = minOf(CAP_MAX, (capKbps * 1.2).toInt() + 100)
+                        lastCapChangeNs = now
+                        if (congested) {
+                            congested = false
+                            logger.log("Lien $name dégagé (RTT ${rttMs.toInt()} ms) : plafond ${capKbps} kb/s, relevé de 20 % par seconde")
+                        }
+                    }
+                } else {
+                    clearSinceNs = 0L
                 }
             }
         }
@@ -222,10 +296,11 @@ class LinkMux(
             System.nanoTime() - lastPongNs > 5_000_000_000L -> "mort"
             suspect -> "suspect"
             lossPct() > 20 || rttMs > 1500 -> "dégradé"
+            congested -> "encombré"
             else -> "ok"
         }
 
-        fun usable() = state().let { it == "ok" || it == "dégradé" }
+        fun usable() = state().let { it == "ok" || it == "dégradé" || it == "encombré" }
 
         fun remember(payload: ByteArray) {
             val now = System.nanoTime()
@@ -369,8 +444,10 @@ class LinkMux(
             else -> {
                 videoPackets++
                 val withShare = usable.filter { it.share > 0 }.ifEmpty { usable }
-                val healthy = withShare.filter { it.state() == "ok" || it.state() == "démarrage" }.ifEmpty { withShare }
-                listOf(healthy.minByOrNull { it.sentBytes / maxOf(it.share, 1e-6) }!!)
+                val healthy = withShare.filter { it.state() == "ok" || it.state() == "démarrage" || it.state() == "encombré" }.ifEmpty { withShare }
+                // a capped link takes video only while under its cap; the plan split rules among the links with room
+                val room = healthy.filter { it.rateKbps() < it.capKbps }.ifEmpty { healthy }
+                listOf(room.minByOrNull { it.sentBytes / maxOf(it.share, 1e-6) }!!)
             }
         }
         for (link in targets) {
@@ -473,6 +550,8 @@ class LinkMux(
         private const val PING_MS = 100L
         private const val SUSPECT_MISSES = 3
         private const val RECOVER_PONGS = 5
+        private const val CAP_MAX = 100_000   // kb/s : plafond « sans limite » d'un lien
+        private const val CAP_MIN = 300
         private const val REPLAY_NS = 1_000_000_000L
         private const val VIDEO_PID = 0x100
 
