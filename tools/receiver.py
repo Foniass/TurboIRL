@@ -32,6 +32,7 @@ from collections import deque
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from obs import Obs  # noqa: E402
 import json  # noqa: E402
+import http.server  # noqa: E402
 import urllib.request  # noqa: E402
 
 DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
@@ -245,9 +246,70 @@ ORDER_TEXTS = [
     ("TurboIRL total", "0 €", 24.0, 140.0, True),
     ("TurboIRL commande titre", "COMMANDE #1", 24.0, 200.0, False),
     ("TurboIRL commande prix", "0 €", 24.0, 250.0, False),
-    ("TurboIRL commande temps", "00:00", 24.0, 300.0, False),
 ]
-CURRENT_TEXTS = ("TurboIRL commande titre", "TurboIRL commande prix", "TurboIRL commande temps")
+CURRENT_TEXTS = ("TurboIRL commande titre", "TurboIRL commande prix")
+# Le chrono de la commande en cours est une source navigateur (page servie par ce programme sur 127.0.0.1) : un texte
+# relu depuis un fichier sautait des secondes, OBS ne relisant le fichier qu'environ une fois par seconde, à son rythme.
+CHRONO_NAME = "TurboIRL commande chrono"
+OLD_TIMER_NAME = "TurboIRL commande temps"   # ancien texte (PC 2.6 à 2.15), retiré de la scène
+CHRONO_CSS = ("html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }\n"
+              "#t { font: bold 40px 'Segoe UI', Arial, sans-serif; color: #fff; white-space: nowrap;\n"
+              "     text-shadow: 0 0 4px #000, 0 0 4px #000, 0 0 6px #000, 2px 2px 3px #000; }")
+CHRONO_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>TurboIRL chrono</title></head>
+<body><div id="t"></div>
+<script>
+var el = document.getElementById("t"), shown = false, started = null, offset = 0, last = "";
+function draw() {
+  if (!shown || started === null) { el.style.display = "none"; return; }
+  var e = Math.max(0, Math.floor(Date.now() / 1000 + offset - started));
+  var txt = (e / 60 | 0).toString().padStart(2, "0") + ":" + (e % 60).toString().padStart(2, "0");
+  if (txt !== last) { el.textContent = txt; last = txt; }
+  el.style.display = "";
+}
+function poll() {
+  fetch("/commande.json", {cache: "no-store"}).then(function (r) { return r.json(); }).then(function (j) {
+    shown = !!j.shown; started = j.startedAt; offset = j.now - Date.now() / 1000; draw();
+  }).catch(function () {});
+}
+setInterval(poll, 250); setInterval(draw, 100); poll();
+</script></body></html>"""
+# état lu par la page (mis à jour par ObsOverlay.apply_orders) : chrono affiché, départ (heure serveur), heure serveur
+CHRONO_STATE = {"shown": False, "startedAt": None, "offset": 0.0, "title": "", "price": ""}
+
+
+class ChronoHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/commande.json"):
+            st = dict(CHRONO_STATE)
+            body = json.dumps({"shown": st["shown"], "startedAt": st["startedAt"], "now": time.time() + st["offset"],
+                               "title": st["title"], "price": st["price"]}).encode()
+            ctype = "application/json"
+        elif self.path.startswith("/commande.html") or self.path == "/":
+            body = CHRONO_HTML.encode("utf-8")
+            ctype = "text/html; charset=utf-8"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start_chrono_server(port):
+    """Petit serveur HTTP local pour la source navigateur du chrono ; None si le port est pris."""
+    try:
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), ChronoHandler)
+    except OSError as e:
+        log(f"chrono OBS : serveur local impossible sur le port {port} ({e})")
+        return None
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
 CURRENT_BG = "TurboIRL commande bg"   # fond ajouté à la main dans OBS (facultatif) : suit la visibilité de la commande en cours
 SHOW_DELAY_S = 1.5   # OBS relit les fichiers environ chaque seconde : on n'affiche qu'une fois le nouveau contenu lu
 time.strptime("2000-01-01", "%Y-%m-%d")  # charge _strptime une fois (premier appel non sûr entre threads)
@@ -388,6 +450,7 @@ class ObsOverlay:
             item_id, ch = self.ensure_text_source(obs, name, default, x, y, shown, from_file=True)
             self.texts[name] = item_id
             fixed += ch
+        fixed += self.ensure_chrono_source(obs)
         self.bg_item, self.bg_shown, self.bg_checked = None, None, 0.0
         self.obs = obs
         self.item = item
@@ -496,6 +559,42 @@ class ObsOverlay:
         obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": max(n - 1, 0)})
         return item_id, fixed
 
+    def ensure_chrono_source(self, obs):
+        """Source navigateur du chrono (page locale), toujours active : la page s'affiche ou se masque elle-même.
+        Style libre dans « CSS personnalisé » de la source. L'ancien texte « commande temps » est retiré."""
+        fixed = []
+        url = f"http://127.0.0.1:{self.r.a.web_port}/commande.html"
+        inputs = {i["inputName"]: i for i in obs.request("GetInputList").get("inputs", [])}
+        if OLD_TIMER_NAME in inputs:
+            try:
+                obs.request("RemoveInput", {"inputName": OLD_TIMER_NAME})
+                fixed.append("ancien texte durée retiré (remplacé par le chrono)")
+            except RuntimeError:
+                pass
+        try:
+            item_id = obs.request("GetSceneItemId", {"sceneName": SCENE_NAME, "sourceName": CHRONO_NAME})["sceneItemId"]
+        except RuntimeError:
+            if CHRONO_NAME in inputs:
+                item_id = obs.request("CreateSceneItem", {"sceneName": SCENE_NAME, "sourceName": CHRONO_NAME, "sceneItemEnabled": True})["sceneItemId"]
+                fixed.append("chrono ajouté à la scène")
+            else:
+                settings = {"url": url, "width": 420, "height": 70, "css": CHRONO_CSS, "shutdown": False,
+                            "restart_when_active": False, "reroute_audio": False}
+                item_id = obs.request("CreateInput", {"sceneName": SCENE_NAME, "inputName": CHRONO_NAME, "inputKind": "browser_source",
+                                                      "inputSettings": settings, "sceneItemEnabled": True})["sceneItemId"]
+                fixed.append("chrono créé")
+            obs.request("SetSceneItemTransform", {"sceneName": SCENE_NAME, "sceneItemId": item_id,
+                                                  "sceneItemTransform": {"positionX": 24.0, "positionY": 300.0}})
+        cur = obs.request("GetInputSettings", {"inputName": CHRONO_NAME}).get("inputSettings", {})
+        if cur.get("url") != url:
+            obs.request("SetInputSettings", {"inputName": CHRONO_NAME, "inputSettings": {"url": url}, "overlay": True})
+            fixed.append("chrono : adresse de la page remise")
+        obs.request("SetSceneItemEnabled", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemEnabled": True})
+        n = len(obs.request("GetSceneItemList", {"sceneName": SCENE_NAME}).get("sceneItems", []))
+        obs.request("SetSceneItemIndex", {"sceneName": SCENE_NAME, "sceneItemId": item_id, "sceneItemIndex": max(n - 1, 0)})
+        self.texts[CHRONO_NAME] = item_id
+        return fixed
+
     @staticmethod
     def file_settings(kind, name):
         """Réglages « lire depuis un fichier » selon le type de source texte."""
@@ -556,15 +655,17 @@ class ObsOverlay:
             cur = content.get("current") or vcur   # commande qui finit : visible jusqu'au bout de son délai
             if cur:
                 t0 = iso_epoch(cur.get("startedAt") or "")
-                elapsed = max(0, int(t_disp - t0)) if t0 is not None else 0
                 shown = bool(vcur) and vcur.get("id") == cur.get("id")
                 self.set_text("TurboIRL commande titre", f"COMMANDE #{cur.get('id', '?')}", shown)
                 self.set_text("TurboIRL commande prix", euros(cur.get("price", 0)), shown)
-                self.set_text("TurboIRL commande temps", "%02d:%02d" % (elapsed // 60, elapsed % 60), shown)
+                # la page du chrono compte elle-même à partir du départ, sur l'heure du serveur décalée du délai vidéo
+                CHRONO_STATE.update(shown=shown and t0 is not None, startedAt=(t0 + self.order_delay_s) if t0 is not None else None,
+                                    offset=server_now - time.time(), title=f"COMMANDE #{cur.get('id', '?')}", price=euros(cur.get("price", 0)))
                 self.set_bg(shown)
             else:
                 for name in CURRENT_TEXTS:
                     self.set_text(name, "", False)
+                CHRONO_STATE.update(shown=False, startedAt=None, offset=server_now - time.time())
                 self.set_bg(False)
           except Exception as e:
             log(f"OBS : textes des commandes indisponibles ({e})")
@@ -1152,6 +1253,7 @@ class Receiver:
             threading.Thread(target=fn, daemon=True).start()
         overlay = None
         if self.a.obs_overlay:
+            start_chrono_server(self.a.web_port)
             overlay = ObsOverlay(self, self.a.obs_overlay, self.a.overlay_text, self.a.freeze_seconds)
             overlay.start()
         self.overlay = overlay
@@ -1203,8 +1305,10 @@ def parse_args(argv=None):
     # 24/09 soir (relais VPS) : la liaison caméra → téléphone (Wi-Fi du hotspot) se coupe 1 à 2 s de temps en temps,
     # et rien ne peut tamponner ça en amont ; 2500 ms de réserve couvrent ces trous sans silence (délai +1,3 s)
     ap.add_argument("--prefill-ms", type=int, default=2500)
-    ap.add_argument("--order-extra-ms", type=int, default=2000,
-                    help="part fixe du délai GoPro → OBS (GoPro, transcodage téléphone, source média OBS) pour décaler les textes des commandes")
+    ap.add_argument("--web-port", type=int, default=9011, help="port HTTP local de la page du chrono (source navigateur OBS)")
+    ap.add_argument("--order-extra-ms", type=int, default=5000,
+                    help="part fixe du délai GoPro → OBS (GoPro, transcodage téléphone, source média OBS) pour décaler les textes des commandes "
+                         "(26/09 : avec 2 s, la commande apparaissait 3 s avant l'appui à l'image)")
     ap.add_argument("--max-ms", type=int, default=8000)
     ap.add_argument("--slack-ms", type=int, default=1500)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",
