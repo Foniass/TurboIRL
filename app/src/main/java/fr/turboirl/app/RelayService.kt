@@ -100,6 +100,7 @@ class RelayService : Service() {
         if (tele.hasLocationPermission) fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
         ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification("Démarrage…"), fgType)
         tele.start()
+        logger.log("Position : ${tele.locationState()}")
         telemetry = tele
         instance = this
 

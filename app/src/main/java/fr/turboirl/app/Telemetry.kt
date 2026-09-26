@@ -44,8 +44,23 @@ class Telemetry(private val context: Context) {
     private var lastRetrans = 0L
     private var lastDropped = 0L
 
+    private fun granted(p: String) = context.checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
+
+    /** Fine or approximate: Android 12+ lets the user grant « approximate » only, which still gives a network fix. */
     val hasLocationPermission: Boolean
-        get() = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        get() = granted(Manifest.permission.ACCESS_FINE_LOCATION) || granted(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+    /** For the journal: what the phone lets us have (26/09: a phone sent no position at all, silently). */
+    fun locationState(): String {
+        val perm = when {
+            granted(Manifest.permission.ACCESS_FINE_LOCATION) -> "permission précise"
+            granted(Manifest.permission.ACCESS_COARSE_LOCATION) -> "permission approximative seulement"
+            else -> "permission refusée"
+        }
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            .filter { runCatching { locationManager.isProviderEnabled(it) }.getOrDefault(false) }
+        return "$perm, " + (if (providers.isEmpty()) "localisation désactivée sur le téléphone" else "fournisseurs ${providers.joinToString("+")}")
+    }
 
     @SuppressLint("MissingPermission")
     fun start() {
