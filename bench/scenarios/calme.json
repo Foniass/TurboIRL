@@ -1,0 +1,8 @@
+{
+  "name": "calme : 5G et Wi-Fi sains, latences 60 / 20 ms",
+  "phone": {"latency_ms": 13000, "min_kbps": 400, "max_kbps": 3500, "audio_kbps": 64},
+  "links": [
+    {"name": "5G", "share": 0.6, "segments": [{"t": 0, "kbps": 0, "delay": 60, "jitter": 10}]},
+    {"name": "wifi", "share": 0.4, "segments": [{"t": 0, "kbps": 0, "delay": 20, "jitter": 5}]}
+  ]
+}

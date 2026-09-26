@@ -1,0 +1,39 @@
+logLevel: info
+logDestinations: [stdout]
+api: yes
+apiAddress: 0.0.0.0:9997
+metrics: no
+pprof: no
+playback: no
+rtsp: no
+rtmp: no
+hls: no
+webrtc: no
+moq: no
+srt: yes
+srtAddress: :8890
+authMethod: internal
+authInternalUsers:
+  - user: phone
+    pass: __WRITE_TOKEN__
+    permissions:
+      - action: publish
+        path: ~^turboirl(b|-bench[0-9]+)?$
+      - action: read
+        path: ~^turboirl(b|-bench[0-9]+)?$
+  - user: reader
+    pass: __READ_TOKEN__
+    permissions:
+      - action: read
+        path: ~^turboirl(b|-bench[0-9]+)?$
+  - user: reader
+    pass: __WRITE_TOKEN__
+    permissions:
+      - action: read
+        path: ~^turboirl(b|-bench[0-9]+)?$
+  - user: any
+    permissions:
+      - action: api
+paths:
+  ~^turboirl(b|-bench[0-9]+)?$:
+    record: no

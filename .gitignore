@@ -11,3 +11,6 @@ __pycache__/
 pc/build/
 pc/dist/
 bench/*.mp4
+bench/ladder/
+bench/scenarios/gen/
+bench/vps/bond.py
