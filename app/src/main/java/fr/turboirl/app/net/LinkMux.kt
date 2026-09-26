@@ -334,8 +334,7 @@ class LinkMux(
     @Volatile private var running = false
     @Volatile private var libsrt: InetSocketAddress? = null
     @Volatile private var address: InetAddress? = null   // résolu hors du thread principal (Android l'interdit dessus)
-    private val returnSeen = ArrayDeque<Int>()
-    private val returnSet = HashSet<Int>()
+    private val returnSeen = HashMap<Int, Long>()   // hash du paquet retour → dernière arrivée (ns)
     private var audioPackets = 0L
     private var videoPackets = 0L
     private var replayed = 0L
@@ -464,10 +463,15 @@ class LinkMux(
     private fun onReturn(payload: ByteArray) {
         val dest = libsrt ?: return
         val h = payload.contentHashCode()
+        val now = System.nanoTime()
         synchronized(returnSeen) {
-            if (!returnSet.add(h)) return   // the same return packet may arrive on several links
-            returnSeen.addLast(h)
-            if (returnSeen.size > 256) returnSet.remove(returnSeen.removeFirst())
+            // the same return packet may arrive on several links within a few ms: drop those copies only. The relay
+            // repeats an identical NAK every 100 ms or so until the packet arrives; dropping repeats as duplicates
+            // (before 2.21) made a lost retransmission unrecoverable (bench 26/09: 311 to 930 missing frames)
+            val last = returnSeen[h]
+            if (last != null && now - last < RETURN_DUP_NS) return
+            returnSeen[h] = now
+            if (returnSeen.size > 512) returnSeen.entries.removeIf { now - it.value > RETURN_DUP_NS }
         }
         try {
             local.send(DatagramPacket(payload, payload.size, dest))
@@ -550,6 +554,7 @@ class LinkMux(
         private const val PING_MS = 100L
         private const val SUSPECT_MISSES = 3
         private const val RECOVER_PONGS = 5
+        private const val RETURN_DUP_NS = 300_000_000L   // copies d'un même paquet retour reçues à moins de 300 ms = doublons
         private const val CAP_MAX = 100_000   // kb/s : plafond « sans limite » d'un lien
         private const val CAP_MIN = 300
         private const val REPLAY_NS = 1_000_000_000L

@@ -287,8 +287,7 @@ def main():
     local.bind(("127.0.0.1", a.local))
     local.setblocking(False)
     libsrt_addr = None
-    seen = collections.deque(maxlen=256)
-    seen_set = set()
+    seen_at = {}   # hash d'un paquet retour → heure de la dernière copie
     seq_link = collections.OrderedDict()   # séquence SRT → lien qui l'a portée (fenêtre récente)
     last_ping = 0.0
     last_report = time.time()
@@ -352,13 +351,15 @@ def main():
                         l.pong(payload, now)
                     elif typ == T_SRT and libsrt_addr is not None:
                         h = hash(payload)
-                        if h in seen_set:
+                        # copies d'un même paquet retour par plusieurs liens = doublons, mais seulement à moins de 300 ms :
+                        # le relais répète un NAK identique jusqu'à l'arrivée du paquet (LinkMux.kt 2.21)
+                        if now - seen_at.get(h, 0.0) < 0.3:
                             counters["retour dupliqué"] += 1
                             continue
-                        if len(seen) == seen.maxlen:
-                            seen_set.discard(seen[0])
-                        seen.append(h)
-                        seen_set.add(h)
+                        seen_at[h] = now
+                        if len(seen_at) > 512:
+                            for k in [k for k, t in seen_at.items() if now - t > 0.3]:
+                                del seen_at[k]
                         counters["retour"] += 1
                         for lost in nak_seqs(payload):
                             owner = seq_link.pop(lost, None)
