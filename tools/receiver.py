@@ -33,6 +33,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from obs import Obs  # noqa: E402
 import json  # noqa: E402
 import http.server  # noqa: E402
+try:
+    import numpy as np  # noqa: E402  (détection du flou dans l'image : mesure du délai réel)
+except ImportError:  # pragma: no cover
+    np = None
 import urllib.request  # noqa: E402
 
 DEFAULT_VPS_URL = "https://turboirl.mathisjacqueline.com"
@@ -219,8 +223,15 @@ class ObsControl:
 
     def status(self):
         st = self._status()
+        r = self.receiver
         st.update({"device": self.device, "version": self.version,
-                   "receiving": bool(self.receiver is not None and self.receiver.decoder_connected)})
+                   "receiving": bool(r is not None and r.decoder_connected)})
+        if r is not None:
+            # part fixe côté PC (l'appli en déduit le tampon SRT pour tenir le délai cible), délai mesuré
+            st["pcDelayMs"] = int(r.a.relay_latency_ms + r.a.prefill_ms + OBS_CONST_MS)
+            if r.measured_delay_s is not None:
+                st["measuredDelayMs"] = int(r.measured_delay_s * 1000)
+                st["delayMs"] = int((r.measured_delay_s + r.a.gopro_obs_ms / 1000) * 1000)
         self.last_status = st
         return st
 
@@ -239,6 +250,7 @@ class ObsControl:
         return {"obsOpen": True, "streaming": bool(st.get("outputActive")), "timecode": st.get("outputTimecode", "")[:8], "kbps": kbps}
 
 TS_PACKET = 188
+OBS_CONST_MS = 700               # source média OBS + encodeur PC (estimation)
 SCENE_NAME = "TurboIRL"          # scène OBS dédiée : créée si absente, le reste de l'OBS n'est jamais touché
 # Textes des commandes de livraison (créés s'ils manquent, contenu et visibilité pilotés ici, style et position libres)
 ORDER_TEXTS = [
@@ -620,14 +632,17 @@ class ObsOverlay:
             self.text_state[name] = (text, shown)
 
     def order_delay(self):
-        """Délai GoPro → OBS estimé, appliqué aux textes des commandes pour qu'ils changent avec l'image de l'appui :
-        tampon SRT téléphone → VPS (livraison à heure fixe), latence SRT VPS → PC, son en réserve dans le répéteur
-        (mesuré), plus une constante pour la GoPro, le transcodage du téléphone et la source média d'OBS."""
+        """Délai GoPro → OBS appliqué aux textes des commandes pour qu'ils changent avec l'image de l'appui.
+        Mesuré quand le PC a retrouvé un appui sur FLOUTER dans l'image (délai téléphone → sortie du récepteur, exact),
+        sinon estimé : tampon SRT téléphone → VPS (livraison à heure fixe), latence SRT VPS → PC, son en réserve dans
+        le répéteur, transcodage du téléphone. Dans les deux cas s'ajoute la constante GoPro + source média d'OBS."""
         r = self.r
+        if r.measured_delay_s is not None and time.time() - r.measured_at < 3600:
+            return r.measured_delay_s + r.a.gopro_obs_ms / 1000
         phone = (self.phone_latency_ms or 12000) / 1000
         relay = r.a.relay_latency_ms / 1000 if r.a.relay_token else 0.0
         queued = r.fifo_len / (r.rate * r.bps) if r.audio_started else r.a.prefill_ms / 1000
-        return phone + relay + queued + r.a.order_extra_ms / 1000
+        return phone + relay + queued + (r.a.phone_ms + r.a.gopro_obs_ms) / 1000
 
     def apply_orders(self, st, server_now):
         """État des commandes (API du VPS, avec historique daté) → textes OBS, décalés du délai vidéo.
@@ -772,6 +787,14 @@ class Receiver:
         self.latest = bytes([16]) * (self.w * self.h) + bytes([128]) * (self.w * self.h // 2)
         self.frames_in = self.frames_out = self.repeated = self.distinct = self.late = self.skipped = 0
         self.silence_chunks = self.skipped_audio = 0
+        # mesure du délai réel : l'appui sur FLOUTER est daté par le VPS (repère), retrouvé ici quand la pixellisation
+        # apparaît dans l'image sortie vers OBS
+        self.frame_index = 0
+        self.blur_state = None         # None = inconnu, True = image pixellisée
+        self.blur_votes = 0
+        self.matched_marks = set()
+        self.measured_delay_s = None   # téléphone (encodeur) → sortie du récepteur, en secondes
+        self.measured_at = 0.0
         self.sync_worst = 0.0
         self.last_new_frame = time.perf_counter()  # dernière image nouvelle montrée (gel = rien depuis freeze_s)
         self.pts_lines = 0  # lignes « src=v » lues (doit suivre frames_in ; sinon l'appariement par rang dérive)
@@ -1205,11 +1228,63 @@ class Receiver:
                 now = time.perf_counter()
                 if now < next_v:
                     time.sleep(next_v - now)
-                cv.sendall(self.next_frame())
+                frame = self.next_frame()
+                cv.sendall(frame)
                 self.frames_out += 1
+                self.frame_index += 1
+                if self.frame_index % 3 == 0:
+                    self.check_blur(frame)
                 next_v += period
         except OSError:
             self._close_all(socks)
+
+    def check_blur(self, frame):
+        """Pixellisation (FLOUTER) présente dans l'image ? Médiane, sur les colonnes, de la différence entre pixels
+        voisins : quasi nulle sur des blocs uniformes de 26 px, plusieurs unités sur une image naturelle."""
+        if np is None or not self.decoder_connected or time.perf_counter() - self.last_new_frame > 1.0:
+            return
+        try:
+            y = np.frombuffer(frame, np.uint8, self.w * self.h).reshape(self.h, self.w)[::4]
+            if y.mean() < 20:
+                return  # image noire : rien à en dire
+            col = np.abs(np.diff(y.astype(np.int16), axis=1)).mean(axis=0)
+            edges = float(np.sort(col)[-max(1, col.size // 20):].mean())   # les frontières de blocs, elles, tranchent
+            blurred = bool(np.median(col) < 1.0 and edges > 1.5)           # (un mur uni n'a ni l'un ni l'autre)
+        except Exception:
+            return
+        if blurred == self.blur_state:
+            self.blur_votes = 0
+            return
+        self.blur_votes += 1
+        if self.blur_votes < 3:
+            return
+        self.blur_votes = 0
+        first = self.blur_state is None
+        self.blur_state = blurred
+        if not first:
+            log(f"image : {'flou détecté' if blurred else 'image nette'}")
+            self.match_mark(blurred)
+
+    def match_mark(self, blurred):
+        """Le changement de flou vu à l'image correspond-il à un appui récent (repère daté par le VPS) ? Si oui, le
+        délai téléphone → sortie du récepteur est mesuré."""
+        ctl = self.control
+        if ctl is None or not ctl.orders:
+            return
+        now_server = time.time() + ctl.orders_offset
+        for m in reversed(ctl.orders.get("marks") or []):
+            if m.get("kind") != "blur" or bool(m.get("on")) != blurred or m.get("at") in self.matched_marks:
+                continue
+            at = iso_epoch(m.get("at") or "")
+            if at is None:
+                continue
+            delay = now_server - at
+            if 3.0 <= delay <= 45.0:
+                self.matched_marks.add(m.get("at"))
+                self.measured_delay_s = delay if self.measured_delay_s is None else 0.5 * self.measured_delay_s + 0.5 * delay
+                self.measured_at = time.time()
+                log(f"délai téléphone → OBS mesuré : {delay:.1f} s (appui FLOUTER retrouvé à l'image), retenu {self.measured_delay_s:.1f} s")
+            break
 
     def audio_out(self, ca, t0, socks, silence, stop):
         next_a = t0
@@ -1295,7 +1370,7 @@ def parse_args(argv=None):
                     "srt://0.0.0.0:9000?mode=listener&latency=... (téléphone en direct) ou udp://... (relecture)")
     ap.add_argument("--relay-host", default=DEFAULT_RELAY_HOST)
     ap.add_argument("--relay-port", type=int, default=8890)
-    ap.add_argument("--relay-latency-ms", type=int, default=1000, help="latence SRT VPS → PC (le gros tampon est côté téléphone → VPS)")
+    ap.add_argument("--relay-latency-ms", type=int, default=500, help="latence SRT VPS → PC (le gros tampon est côté téléphone → VPS)")
     ap.add_argument("--dump-dir", default="", help="dossier des dumps bruts (vide = pas de dump)")
     ap.add_argument("--obs-port", type=int, default=9001)
     ap.add_argument("--once", action="store_true", help="une seule session de décodeur puis fin (relecture)")
@@ -1310,11 +1385,11 @@ def parse_args(argv=None):
     # coupait le son de 1,8 s) ; --slack-ms : au-dessus de réserve + marge, on saute en avant d'un coup jusqu'à la réserve (délai constant).
     # 24/09 soir (relais VPS) : la liaison caméra → téléphone (Wi-Fi du hotspot) se coupe 1 à 2 s de temps en temps,
     # et rien ne peut tamponner ça en amont ; 2500 ms de réserve couvrent ces trous sans silence (délai +1,3 s)
-    ap.add_argument("--prefill-ms", type=int, default=2500)
+    ap.add_argument("--prefill-ms", type=int, default=2000)
     ap.add_argument("--web-port", type=int, default=9011, help="port HTTP local de la page du chrono (source navigateur OBS)")
-    ap.add_argument("--order-extra-ms", type=int, default=5000,
-                    help="part fixe du délai GoPro → OBS (GoPro, transcodage téléphone, source média OBS) pour décaler les textes des commandes "
-                         "(26/09 : avec 2 s, la commande apparaissait 3 s avant l'appui à l'image)")
+    ap.add_argument("--gopro-obs-ms", type=int, default=4700,
+                    help="part fixe GoPro + source média OBS du délai GoPro → OBS (26/09 : 4,7 s d'après l'écart observé sur les commandes)")
+    ap.add_argument("--phone-ms", type=int, default=300, help="transcodage du téléphone, pour l'estimation quand rien n'est mesuré")
     ap.add_argument("--max-ms", type=int, default=8000)
     ap.add_argument("--slack-ms", type=int, default=500)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",

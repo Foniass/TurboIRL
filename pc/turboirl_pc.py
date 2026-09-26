@@ -331,7 +331,7 @@ class App:
                 txt = f"{o.get('count', 0)} finie(s) · total {total}" + (f" · #{cur.get('id')} en cours ({receiver.euros(cur.get('price', 0))})" if cur else "")
                 ov = self.receiver.overlay if self.receiver is not None else None
                 if ov is not None and ov.order_delay_s:
-                    txt += f" · OBS décalé de {ov.order_delay_s:.0f} s"
+                    txt += f" · OBS décalé de {ov.order_delay_s:.0f} s ({'mesuré' if self.receiver.measured_delay_s is not None else 'estimé'})"
                 self.set("orders", txt, GREEN if cur else GREY)
             else:
                 self.set("orders", "…", GREY)

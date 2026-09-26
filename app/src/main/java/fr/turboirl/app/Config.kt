@@ -6,6 +6,8 @@ data class Config(
     val srtHost: String,
     val srtPort: Int,
     val srtLatencyMs: Int,
+    /** GoPro → OBS delay the user wants, in seconds; the SRT latency is derived from it at each start. */
+    val targetDelayS: Int,
     val rtmpPort: Int,
     val outMaxKbps: Int,
     val outMaxHeight: Int,
@@ -46,6 +48,7 @@ data class Config(
             .putString("srtHost", srtHost)
             .putInt("srtPort", srtPort)
             .putInt("srtLatencyMs", srtLatencyMs)
+            .putInt("targetDelayS", targetDelayS)
             .putInt("rtmpPort", rtmpPort)
             .putInt("outMaxKbps", outMaxKbps)
             .putInt("outMaxHeight", outMaxHeight)
@@ -112,6 +115,7 @@ data class Config(
                 // 12 s of SRT latency: short 4G dips are absorbed instead of freezing (≈ 15 s end to end)
                 // 12 s (v3): the 23/09 test showed a 12 s near-total outage overflowing 8 s
                 srtLatencyMs = if (p.contains("latencyV3")) p.getInt("srtLatencyMs", 12000) else 12000,
+                targetDelayS = p.getInt("targetDelayS", 20),
                 rtmpPort = p.getInt("rtmpPort", 1935),
                 outMaxKbps = p.getInt("outMaxKbps", 3500),
                 outMaxHeight = p.getInt("outMaxHeight", 720),

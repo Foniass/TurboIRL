@@ -177,13 +177,21 @@
             </LinearLayout>
 
             <LinearLayout style="@style/FieldRow">
-                <TextView style="@style/FieldLabel" android:text="Latence (ms)" />
+                <TextView style="@style/FieldLabel" android:text="Délai cible GoPro → OBS (s)" />
                 <EditText
                     android:id="@+id/srtLatency"
                     style="@style/FieldInput"
-                    android:hint="12000"
+                    android:hint="20"
                     android:inputType="number" />
             </LinearLayout>
+
+            <TextView
+                android:id="@+id/latencyInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#BBBBBB"
+                android:textSize="12sp"
+                android:text="Tampon SRT calculé : …" />
         </LinearLayout>
 
         <!-- ============================ Connexions ============================ -->

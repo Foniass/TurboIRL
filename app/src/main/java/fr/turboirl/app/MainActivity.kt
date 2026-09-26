@@ -21,12 +21,18 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
 
+private const val UPSTREAM_FIXED_MS = 3800    // GoPro (≈ 3,5 s) + transcodage du téléphone (≈ 0,3 s)
+private const val DEFAULT_PC_DELAY_MS = 3200  // relais 0,5 s + réserve 2 s + OBS 0,7 s, tant que le PC ne l'a pas publié
+
 class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var srtHost: EditText
     private lateinit var srtPort: EditText
-    private lateinit var srtLatency: EditText
+    private lateinit var srtLatency: EditText        // délai cible GoPro → OBS, en secondes (le tampon SRT en découle)
+    private lateinit var latencyInfo: TextView
+    @Volatile private var pcDelayMs = DEFAULT_PC_DELAY_MS   // part fixe côté PC (relais + réserve + OBS), publiée par le logiciel PC
+    @Volatile private var measuredDelayMs = 0               // délai GoPro → OBS mesuré par le PC (0 = pas encore)
     private lateinit var toggle: Button
     private lateinit var battery: Button
     private lateinit var share: Button
@@ -93,6 +99,7 @@ class MainActivity : Activity() {
         srtHost = findViewById(R.id.srtHost)
         srtPort = findViewById(R.id.srtPort)
         srtLatency = findViewById(R.id.srtLatency)
+        latencyInfo = findViewById(R.id.latencyInfo)
         toggle = findViewById(R.id.toggle)
         battery = findViewById(R.id.battery)
         share = findViewById(R.id.share)
@@ -145,7 +152,13 @@ class MainActivity : Activity() {
         val config = Config.load(this)
         srtHost.setText(config.srtHost)
         srtPort.setText(config.srtPort.toString())
-        srtLatency.setText(config.srtLatencyMs.toString())
+        srtLatency.setText(config.targetDelayS.toString())
+        srtLatency.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) { updateLatencyInfo() }
+        })
+        updateLatencyInfo()
         outMaxKbps.setText(config.outMaxKbps.toString())
         outMaxHeight.setText(config.outMaxHeight.toString())
         audioKbps.setText(config.audioKbps.toString())
@@ -283,6 +296,7 @@ class MainActivity : Activity() {
             } else {
                 service.setBlur(!service.blurred)
                 applyBlurButton()
+                postMark("blur", service.blurred)
             }
         }
         orderGo.setOnClickListener { orderAction() }
@@ -478,6 +492,29 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /**
+     * SRT latency giving the wanted GoPro → OBS delay: everything else in the chain is a fixed cost. Upstream
+     * (GoPro ≈ 3,5 s + transcoding ≈ 0,3 s) is a constant; the PC side (relay latency + reserve + OBS) is what the
+     * PC software publishes, with a default when it has not been seen yet.
+     */
+    private fun srtLatencyFor(targetS: Int): Int =
+        (targetS * 1000 - UPSTREAM_FIXED_MS - pcDelayMs).coerceIn(3000, 25000)
+
+    private fun updateLatencyInfo() {
+        val target = srtLatency.text.toString().toIntOrNull() ?: return
+        val lat = srtLatencyFor(target) / 1000.0
+        val measured = if (measuredDelayMs > 0) " · mesuré : ${"%.1f".format(measuredDelayMs / 1000.0)} s" else ""
+        latencyInfo.text = "Tampon SRT calculé : ${"%.1f".format(lat)} s (GoPro + téléphone ${UPSTREAM_FIXED_MS / 1000.0} s, PC ${"%.1f".format(pcDelayMs / 1000.0)} s)$measured"
+    }
+
+    /** A dated mark on the VPS (FLOUTER on/off): the PC finds it in the picture and measures the real delay. */
+    private fun postMark(kind: String, on: Boolean) {
+        val config = Config.load(this)
+        val token = vpsToken.text.toString().trim().ifEmpty { config.vpsToken }
+        if (token.isEmpty()) return
+        Uploader.postOrders(config.vpsUrl, token, org.json.JSONObject().put("action", "mark").put("kind", kind).put("on", on)) {}
+    }
+
     private fun applyBlurButton() {
         val on = RelayService.instance?.blurred ?: false
         blur.text = if (on) "DÉFLOUTER" else "FLOUTER"
@@ -546,6 +583,11 @@ class MainActivity : Activity() {
         while (obsPolling) {
             val token = vpsToken.text.toString().trim()
             val st = if (token.isEmpty()) null else Uploader.fetchObsStatus(Config.load(this).vpsUrl, token)
+            if (st != null) {
+                st.optInt("pcDelayMs").takeIf { it > 0 }?.let { pcDelayMs = it }
+                measuredDelayMs = st.optInt("delayMs")
+                handler.post { updateLatencyInfo() }
+            }
             val text = if (token.isEmpty()) {
                 "OBS PC : renseigne le jeton VPS pour piloter le stream"
             } else {
@@ -706,9 +748,9 @@ class MainActivity : Activity() {
         val host = srtHost.text.toString().trim().split(Regex("""\s+""")).first()
         if (host != srtHost.text.toString()) srtHost.setText(host)
         val port = srtPort.text.toString().toIntOrNull()
-        val latency = srtLatency.text.toString().toIntOrNull()
-        if (host.isEmpty() || port == null || port !in 1..65535 || latency == null || latency !in 120..15000) {
-            Toast.makeText(this, "Adresse, port (1-65535) et latence (120-15000 ms) requis", Toast.LENGTH_LONG).show()
+        val target = srtLatency.text.toString().toIntOrNull()
+        if (host.isEmpty() || port == null || port !in 1..65535 || target == null || target !in 8..60) {
+            Toast.makeText(this, "Adresse, port (1-65535) et délai cible (8 à 60 s) requis", Toast.LENGTH_LONG).show()
             return
         }
         val outMax = outMaxKbps.text.toString().toIntOrNull()
@@ -741,7 +783,7 @@ class MainActivity : Activity() {
             }
         }
         Config.load(this).copy(
-            srtHost = host, srtPort = port, srtLatencyMs = latency,
+            srtHost = host, srtPort = port, srtLatencyMs = srtLatencyFor(target), targetDelayS = target,
             outMaxKbps = outMax,
             outMaxHeight = outH,
             audioKbps = aKbps,

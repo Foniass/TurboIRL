@@ -107,6 +107,7 @@ class VideoTranscoder(
 
     @Volatile private var targetKbps = initialKbps
     private var cbrLogged = false
+    @Volatile private var bitrateFactor = 1.0   // 0.9 when the encoder cannot do CBR
 
     // ---------------------------------------------------------------- VideoProcessor (RTMP thread)
 
@@ -159,7 +160,7 @@ class VideoTranscoder(
         targetKbps = kbps
         handler.post {
             try {
-                encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, kbps * 1000) })
+                encoder?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, (kbps * 1000 * bitrateFactor).toInt()) })
             } catch (e: Exception) {
                 logger.log("Encodeur : changement de débit refusé (${e.message})")
             }
@@ -288,18 +289,20 @@ class VideoTranscoder(
         val (w, h) = outputSize()
         val mime = pickOutputMime()
         val enc = MediaCodec.createEncoderByType(mime)
+        val caps = enc.codecInfo.getCapabilitiesForType(mime).encoderCapabilities
+        val cbr = caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
+        // no CBR (Qualcomm HEVC): the encoder's peaks overshoot the target and grow the SRT buffer, so aim 10 % lower
+        bitrateFactor = if (cbr) 1.0 else 0.9
         val format = MediaFormat.createVideoFormat(mime, w, h).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, targetKbps * 1000)
+            setInteger(MediaFormat.KEY_BIT_RATE, (targetKbps * 1000 * bitrateFactor).toInt())
             setInteger(MediaFormat.KEY_FRAME_RATE, 30)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, GOP_SECONDS)
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-            val caps = enc.codecInfo.getCapabilitiesForType(mime).encoderCapabilities
-            val cbr = caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (cbr) setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
             if (!cbrLogged) {
                 cbrLogged = true
-                logger.log("Encodeur ${enc.name} (${if (mime == MIME_HEVC) "H.265" else "H.264"}) : mode CBR ${if (cbr) "supporté" else "NON supporté (débit variable)"}")
+                logger.log("Encodeur ${enc.name} (${if (mime == MIME_HEVC) "H.265" else "H.264"}) : mode CBR ${if (cbr) "supporté" else "NON supporté (débit variable, cible réduite à 90 %)"}")
             }
         }
         outputHevc = mime == MIME_HEVC
@@ -560,7 +563,7 @@ class VideoTranscoder(
         private const val MAX_DECODED_QUEUE = 3
         private const val IN_FLIGHT_TIMEOUT_NS = 200_000_000L
         private const val MAX_FAILURES = 3
-        private const val GOP_SECONDS = 2
+        private const val GOP_SECONDS = 1   // 1 s (was 2): after an unrecovered loss the picture stays frozen until the next keyframe
         private val START_CODE = byteArrayOf(0, 0, 0, 1)
         private val AUD = byteArrayOf(0x09, 0xF0.toByte())
         private val AUD_HEVC = byteArrayOf(0x46, 0x01, 0x50)
