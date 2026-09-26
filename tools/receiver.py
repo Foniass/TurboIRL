@@ -1045,10 +1045,16 @@ class Receiver:
                 self.audio_started = False  # file vide : silence, puis on reconstitue la réserve
                 self.silence_chunks += 1
                 return None
-            if self.fifo_len > self.prefill + self.slack and self.ticks % 50 == 0:
-                # file trop haute (rafale absorbée) : on rogne 20 ms une fois par seconde, sans coupure audible ;
-                # le délai supplémentaire pris pendant la rafale se résorbe en quelques dizaines de secondes
-                self._drop(self.audio_chunk)
+            if self.fifo_len > self.prefill + self.slack:
+                # retard pris pendant une rafale (coupure plus longue que le tampon SRT) : on saute en avant d'un
+                # coup jusqu'à la réserve, le délai reste constant. Avant (26/09) : rognage de 20 ms par seconde
+                # jusqu'à 8 s de réserve, soit un délai qui grossissait puis se résorbait en plusieurs minutes.
+                dropped = 0
+                while self.fifo_len > self.prefill and self.fifo:
+                    n = len(self.fifo[0])
+                    self._drop(n)
+                    dropped += n
+                log(f"son : {dropped * 1000 / self.bps / self.rate:.0f} ms arrivés en retard sautés (délai constant)")
             self.ticks += 1
             return self._take(self.audio_chunk)
 
@@ -1301,7 +1307,7 @@ def parse_args(argv=None):
     # réserve il ne restait plus de marge et une image sur trois arrivait en retard (2 min de saccades). 1200 ms
     # couvre ce cas. --max-ms : au-delà, la file son est sautée d'un coup (jamais atteint par une simple rafale : en
     # direct le téléphone peut livrer 2,5 s de son d'un coup après un blocage Wi-Fi de la caméra, et le sauter
-    # coupait le son de 1,8 s) ; --slack-ms : au-dessus de réserve + marge, on rogne 20 ms par seconde.
+    # coupait le son de 1,8 s) ; --slack-ms : au-dessus de réserve + marge, on saute en avant d'un coup jusqu'à la réserve (délai constant).
     # 24/09 soir (relais VPS) : la liaison caméra → téléphone (Wi-Fi du hotspot) se coupe 1 à 2 s de temps en temps,
     # et rien ne peut tamponner ça en amont ; 2500 ms de réserve couvrent ces trous sans silence (délai +1,3 s)
     ap.add_argument("--prefill-ms", type=int, default=2500)
@@ -1310,7 +1316,7 @@ def parse_args(argv=None):
                     help="part fixe du délai GoPro → OBS (GoPro, transcodage téléphone, source média OBS) pour décaler les textes des commandes "
                          "(26/09 : avec 2 s, la commande apparaissait 3 s avant l'appui à l'image)")
     ap.add_argument("--max-ms", type=int, default=8000)
-    ap.add_argument("--slack-ms", type=int, default=1500)
+    ap.add_argument("--slack-ms", type=int, default=500)
     ap.add_argument("--obs-overlay", default="TurboIRL coupure",
                     help="source texte OBS à piloter (obs-websocket) ; vide = pas d'incrustation")
     ap.add_argument("--overlay-text", default="Petite coupure, le stream revient dans un instant")
